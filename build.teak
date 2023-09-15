@@ -1,0 +1,32 @@
+bool use86Box #option;
+
+void GetOptions() {
+	ConsoleWriteStdout("[debug]\nexe=bin/test\n");
+}
+
+void Start() {
+	assert PathCreateDirectory("bin");
+
+	str fileList = "bin/system 'k16     sys' "
+		+ "bin/test 'test    exe' ";
+
+//	for int i = 10; i < 40; i += 1 {
+//		assert FileWriteAll("bin/%i%.txt", "the number is %i%");
+//		fileList += "bin/%i%.txt '%i%      txt' ";
+//	}
+
+	assert SystemShellExecute("cc -obin/mkfs mkfs.c");
+	assert SystemShellExecute("cc -obin/fontconv fontconv.c");
+	assert SystemShellExecute("bin/fontconv sans.font bin/sansfont.s def_font");
+	assert SystemShellExecute("nasm -fbin -obin/boot boot.s");
+	assert SystemShellExecute("nasm -fbin -obin/system system.s");
+	assert SystemShellExecute("nasm -fbin -obin/test test.s");
+	assert SystemShellExecute("bin/mkfs %fileList%");
+
+	if use86Box {
+		assert SystemShellExecute("86Box 86box.cfg");
+	} else {
+		str command = "qemu-system-x86_64 -drive file=bin/drive.img,index=0,if=floppy,format=raw -boot a -s";
+		assert SystemShellExecute(command);
+	}
+}
