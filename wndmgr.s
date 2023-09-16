@@ -12,6 +12,63 @@ wndmgr_setup:
 
 	ret
 
+wndmgr_event_loop:
+	xor	ax,ax ; since apps iret to here after callback
+	mov	ds,ax
+
+	.wait:
+	hlt
+	.loop:
+	mov	ax,[cursor_x]
+	mov	bx,[cursor_y]
+	cmp	ax,[cursor_drawn_x]
+	jne	.cursor_moved
+	cmp	bx,[cursor_drawn_y]
+	jne	.cursor_moved
+	jmp	.wait
+
+	.cursor_moved:
+	cli ; this needs to be fast!
+	call	gfx_restore_beneath_cursor
+	mov	ax,[cursor_x]
+	mov	bx,[cursor_y]
+	mov	[cursor_drawn_x],ax
+	mov	[cursor_drawn_y],bx
+	call	gfx_draw_cursor
+	sti
+	jmp	.loop
+
+wndmgr_move_cursor: ; input: ax = dx, dx = dy, ds = 0; preserves: everything; can run in interrupts
+	push	ax
+	push	dx
+	add	[cursor_x],ax
+	add	[cursor_y],dx
+	mov	ax,[gfx_width]
+	dec	ax
+	xor	dx,dx
+	cmp	[cursor_x],ax
+	jle	.c0
+	mov	[cursor_x],ax
+	.c0:
+	cmp	[cursor_x],dx
+	jge	.c1
+	mov	[cursor_x],dx
+	.c1:
+	mov	ax,[gfx_height]
+	dec	ax
+	xor	dx,dx
+	cmp	[cursor_y],ax
+	jle	.c2
+	mov	[cursor_y],ax
+	.c2:
+	cmp	[cursor_y],dx
+	jge	.c3
+	mov	[cursor_y],dx
+	.c3:
+	pop	dx
+	pop	ax
+	ret
+
 wndmgr_repaint: ; input: ds = 0; preserves: everything
 	push	ax
 	push	bx
@@ -146,6 +203,9 @@ wndmgr_repaint: ; input: ds = 0; preserves: everything
 	jmp	.window_loop
 	.window_loop_end:
 
+	.draw_cursor:
+	call	gfx_draw_cursor
+
 	pop	es
 	pop	di
 	pop	si
@@ -196,3 +256,7 @@ do_wndmgr_syscall:
 	jmp	exception_handler
 
 window_list: dw 0
+cursor_x: dw 50
+cursor_y: dw 100
+cursor_drawn_x: dw 50
+cursor_drawn_y: dw 100

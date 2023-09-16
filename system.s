@@ -44,8 +44,8 @@ start:
 
 	call	heap_setup
 	call	disk_buffers_alloc
-	call	gfx_setup
 	call	mouse_setup
+	call	gfx_setup
 	call	wndmgr_setup
 
 	mov	si,.test_file_path
@@ -70,9 +70,13 @@ start:
 	int	0x20
 	mov	bx,sys_file_close
 	int	0x20
+
 	xor	ax,ax
 	mov	ds,ax
-
+	pushf
+	push	ds
+	mov	ax,wndmgr_event_loop
+	push	ax
 	pushf
 	mov	ax,[.test_segment]
 	mov	ds,ax

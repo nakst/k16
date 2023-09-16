@@ -1,13 +1,264 @@
 ; TODO Solid black/white block drawing can be sped up 2x.
 ; TODO Glyph rendering: clipping.
+; TODO Cursor save/restore: clipping.
 
 %include "bin/sansfont.s"
+
+cursor_arrow:
+	db 00000000b,00000000b,00000000b,00000000b,00000000b,00000000b
+	db 01000000b,01000000b,00000000b,00000000b,00000000b,00000000b
+	db 01100000b,01100000b,00000000b,00000000b,00000000b,00000000b
+	db 01110000b,01010000b,00000000b,00000000b,00000000b,00000000b
+	db 01111000b,01001000b,00000000b,00000000b,00000000b,00000000b
+	db 01111100b,01000100b,00000000b,00000000b,00000000b,00000000b
+	db 01111110b,01000010b,00000000b,00000000b,00000000b,00000000b
+	db 01111111b,01000001b,00000000b,00000000b,00000000b,00000000b
+	db 01111111b,01000011b,10000000b,10000000b,00000000b,00000000b
+	db 01111110b,01000010b,00000000b,00000000b,00000000b,00000000b
+	db 01111111b,01011001b,00000000b,00000000b,00000000b,00000000b
+	db 01101111b,01101001b,00000000b,00000000b,00000000b,00000000b
+	db 01000111b,01000100b,10000000b,10000000b,00000000b,00000000b
+	db 00000111b,00000100b,10000000b,10000000b,00000000b,00000000b
+	db 00000011b,00000011b,00000000b,00000000b,00000000b,00000000b
+	db 00000000b,00000000b,00000000b,00000000b,00000000b,00000000b
 
 gfx_setup:
 	mov	ax,0x0010
 	int	0x10
 	mov	word [gfx_width],640
 	mov	word [gfx_height],350
+	mov	ax,(16*3*4 + 8*16*3*2) / 16 ; cursor behind and cursor shift data (see gfx_draw_cursor for why they need to be in the same seg)
+	mov	bx,sys_heap_alloc
+	int	0x20
+	or	ax,ax
+	jz	out_of_memory_error
+	mov	[gfx_cursor_seg],ax
+	mov	si,cursor_arrow
+	call	gfx_set_cursor
+	ret
+
+gfx_set_cursor: ; input: ds = 0, si = cursor; preserves: ds, si
+	mov	bp,si
+	mov	ax,[gfx_cursor_seg]
+	mov	es,ax
+
+	mov	di,16*3*4
+	mov	bl,0
+	.loop1:
+
+	mov	cx,16*6
+	.inner1:
+	lodsb
+
+	mov	bh,bl
+	or	bh,bh
+	jz	.store1
+	shr	al,1
+	dec	bh
+	jz	.store1
+	shr	al,1
+	dec	bh
+	jz	.store1
+	shr	al,1
+	dec	bh
+	jz	.store1
+	shr	al,1
+	dec	bh
+	jz	.store1
+	shr	al,1
+	dec	bh
+	jz	.store1
+	shr	al,1
+	dec	bh
+	jz	.store1
+	shr	al,1
+
+	.store1:
+	stosb
+	loop	.inner1
+	mov	si,bp
+
+	inc	bl
+	cmp	bl,8
+	jne	.loop1
+
+	mov	di,16*3*4
+	mov	bl,0
+	.loop2:
+	add	di,2
+
+	mov	cx,16*6-2
+	.inner2:
+	lodsb
+
+	mov	bh,8
+	sub	bh,bl
+	shl	al,1
+	dec	bh
+	jz	.store2
+	shl	al,1
+	dec	bh
+	jz	.store2
+	shl	al,1
+	dec	bh
+	jz	.store2
+	shl	al,1
+	dec	bh
+	jz	.store2
+	shl	al,1
+	dec	bh
+	jz	.store2
+	shl	al,1
+	dec	bh
+	jz	.store2
+	shl	al,1
+	dec	bh
+	jz	.store2
+	shl	al,1
+
+	.store2:
+	or	[es:di],al
+	inc	di
+	loop	.inner2
+	mov	si,bp
+
+	inc	bl
+	cmp	bl,8
+	jne	.loop2
+
+	ret
+
+gfx_draw_cursor: ; input: ds = 0; trashes: ax, bx, cx, dx, di
+	push	ds
+	push	es
+	push	si
+	mov	dx,0x3CE
+	mov	al,0x05
+	out	dx,al
+	inc	dx
+	xor	al,al
+	out	dx,al ; read mode
+	dec	dx
+	mov	al,0x08
+	out	dx,al
+	inc	dx
+	mov	al,0xFF
+	out	dx,al ; masking
+
+	mov	ax,[cursor_drawn_x]
+	and	ax,7
+	mov	cx,16*3*2
+	mul	cx
+	mov	si,16*3*4
+	add	si,ax
+
+	call	.prepare
+
+	mov	cx,0x100
+	call	.do_plane
+	mov	cx,0x201
+	call	.do_plane
+	mov	cx,0x402
+	call	.do_plane
+	mov	cx,0x803
+	call	.do_plane
+	pop	si
+	pop	es
+	pop	ds
+	ret
+
+	.prepare:
+	mov	ax,[cursor_drawn_y]
+	mov	bx,640/8
+	mul	bx
+	mov	bx,[cursor_drawn_x]
+	shr	bx,1
+	shr	bx,1
+	shr	bx,1
+	add	bx,ax
+	mov	ax,[gfx_cursor_seg]
+	mov	es,ax
+	mov	ax,0xA000
+	mov	ds,ax
+	xor	di,di
+	ret
+
+	.do_plane:
+	mov	dx,0x3CE
+	mov	al,0x04
+	out	dx,al
+	inc	dx
+	mov	al,cl
+	out	dx,al ; set read plane number
+	mov	dx,0x3C4
+	mov	al,0x02
+	out	dx,al
+	inc	dx
+	mov	al,ch
+	out	dx,al ; set write plane bit
+	mov	cx,16
+	.loop:
+	mov	al,[bx + 0]
+	stosb
+	mov	ax,[es:si + 0*2]
+	or	[bx + 0],al
+	xor	[bx + 0],ah
+	mov	al,[bx + 1]
+	stosb
+	mov	ax,[es:si + 1*2]
+	or	[bx + 1],al
+	xor	[bx + 1],ah
+	mov	al,[bx + 2]
+	stosb
+	mov	ax,[es:si + 2*2]
+	or	[bx + 2],al
+	xor	[bx + 2],ah
+	add	bx,640/8
+	add	si,6
+	loop	.loop
+	sub	bx,640/8*16
+	sub	si,96
+	ret
+
+gfx_restore_beneath_cursor: ; input: ds = 0; trashes: everything
+	push	ds
+	mov	dx,0x3CE
+	mov	al,0x08
+	out	dx,al
+	inc	dx
+	mov	al,0xFF
+	out	dx,al ; masking
+	call	gfx_draw_cursor.prepare
+	mov	cl,1
+	call	.copy_plane
+	mov	cl,2
+	call	.copy_plane
+	mov	cl,4
+	call	.copy_plane
+	mov	cl,8
+	call	.copy_plane
+	pop	ds
+	ret
+
+	.copy_plane:
+	mov	dx,0x3C4
+	mov	al,0x02
+	out	dx,al
+	inc	dx
+	mov	al,cl
+	out	dx,al ; set write plane bit
+	mov	cx,16
+	.loop:
+	mov	al,[es:di + 0]
+	mov	[bx + 0],al
+	mov	al,[es:di + 1]
+	mov	[bx + 1],al
+	mov	al,[es:di + 2]
+	mov	[bx + 2],al
+	add	di,3
+	add	bx,640/8
+	loop	.loop
+	sub	bx,640/8*16
 	ret
 
 do_draw_block:
@@ -756,3 +1007,5 @@ do_gfx_syscall:
 
 gfx_width:  dw 0
 gfx_height: dw 0
+
+gfx_cursor_seg: dw 0

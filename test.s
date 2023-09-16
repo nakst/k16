@@ -37,8 +37,7 @@ start:
 ;	mov	bx,sys_display_word
 ;	int	0x20
 
-	cli
-	hlt
+	iret
 
 test_file_path: db '38.txt',0
 test_file_path_2: db 'invalid.txt',0
