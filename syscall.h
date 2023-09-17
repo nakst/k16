@@ -1,5 +1,4 @@
 ; TODO Test sys_heap_alloc and sys_file_open work with a different DS value than the system's.
-; TODO Test file reading across sector boundaries.
 ; TODO Color management; color settings.
 
 ; to make a system call, put the number in bx, cld, and then int 0x20
@@ -16,6 +15,7 @@ sys_draw_frame     equ 0x0301 ; input: cx = style, di = rect; preserves: cx, di
 sys_draw_text      equ 0x0302 ; input: ah = color, al = bold flag, cx = x pos, dx = y pos, si = cstr; preserves: ax, cx, dx, si
 sys_measure_text   equ 0x0303 ; input: al = bold flag, [ds:]si = cstr, [es:]di = out rect; preserves: al, si, di
 sys_wnd_create     equ 0x0400 ; input: ax = offset in memory units to window description (must remain valid); output: ax = handle (0 if error)
+sys_wnd_destroy    equ 0x0401 ; input: ax = handle
 
 error_none      equ 0x00
 error_corrupt   equ 0x01
@@ -51,6 +51,7 @@ rect_b  equ 0x06
 rect_sz equ 0x08
 
 frame_3d_out equ 0x870F
+frame_pushed equ 0x8800
 frame_window equ 0x8F07
 
 wnd_item_code   equ 0x00
@@ -63,8 +64,16 @@ wnd_item_id     equ 0x0A
 wnd_item_flags  equ 0x0C
 wnd_item_string equ 0x0E ; size is 0x0E + length of string
 
+wnd_item_flag_pushed equ (1 << 0)
+
 wnd_item_code_button equ 0x01
 wnd_item_code_title  equ 0x02
+wnd_item_code_static equ 0x03
+
+wnd_desc_callback equ 0x00
+wnd_desc_sz       equ 0x02
+
+msg_clicked equ 0x0001
 
 %macro add_wnditem 8 ; type, left, right, top, bottom, id, flags, string
 	db	%1
@@ -85,7 +94,12 @@ wnd_client_off_y equ 24
 	add_wnditem wnd_item_code_button, %1 + wnd_client_off_x, %2 + wnd_client_off_x, %3 + wnd_client_off_y, %4 + wnd_client_off_y, %5, %6, %7
 %endmacro
 
-%macro wnd_start 1 ; title
+%macro add_static 7 ; left, right, top, bottom, id, flags, string
+	add_wnditem wnd_item_code_static, %1 + wnd_client_off_x, %2 + wnd_client_off_x, %3 + wnd_client_off_y, %4 + wnd_client_off_y, %5, %6, %7
+%endmacro
+
+%macro wnd_start 2 ; title, callback
+	dw	%2
 	add_wnditem wnd_item_code_title, 4, -4, 4, 4 + 18, -1, 0, %1
 %endmacro
 

@@ -88,15 +88,15 @@ mouse_isr:
 
 	.dbuttons:
 	mov	[mouse_lead_byte],al
-	mov	byte [mouse_left],0
-	mov	byte [mouse_right],0
+	mov	byte [mouse_queued_left],0
+	mov	byte [mouse_queued_right],0
 	test	al,0x20
 	jz	.no_left
-	mov	byte [mouse_left],1
+	mov	byte [mouse_queued_left],1
 	.no_left:
 	test	al,0x10
 	jz	.no_right
-	mov	byte [mouse_right],1
+	mov	byte [mouse_queued_right],1
 	.no_right:
 	jmp	.read_loop
 
@@ -110,8 +110,7 @@ mouse_isr:
 	shl	ah,1
 	or	al,ah
 	cbw
-	xor	dx,dx
-	call	wndmgr_move_cursor
+	mov	[mouse_queued_dx],ax
 	jmp	.read_loop
 
 	.dy:
@@ -124,8 +123,11 @@ mouse_isr:
 	or	al,ah
 	cbw
 	mov	dx,ax
-	xor	ax,ax
+	mov	ax,[mouse_queued_dx]
 	call	wndmgr_move_cursor
+	mov	al,[mouse_queued_left]
+	mov	ah,[mouse_queued_right]
+	call	wndmgr_mouse_buttons
 	jmp	.read_loop
 	
 	.no_data:
@@ -138,7 +140,8 @@ mouse_isr:
 	iret
 
 mouse_port: dw 0
-mouse_left: db 0
-mouse_right: db 0
+mouse_queued_left: db 0
+mouse_queued_right: db 0
+mouse_queued_dx: dw 0
 mouse_read_index: db 0
 mouse_lead_byte: db 0

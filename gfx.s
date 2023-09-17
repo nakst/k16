@@ -1,33 +1,42 @@
+; Assuming a 128KB EGA card.
+
 ; TODO Solid black/white block drawing can be sped up 2x.
+; TODO 1px wide/tall line block drawing can be optimized.
 ; TODO Glyph rendering: clipping.
 ; TODO Cursor save/restore: clipping.
 
 %include "bin/sansfont.s"
 
+cursor_rows equ 19
+; Cursor columns is fixed at 16 (2 bytes).
+
 cursor_arrow:
-	db 00000000b,00000000b,00000000b,00000000b,00000000b,00000000b
-	db 01000000b,01000000b,00000000b,00000000b,00000000b,00000000b
-	db 01100000b,01100000b,00000000b,00000000b,00000000b,00000000b
-	db 01110000b,01010000b,00000000b,00000000b,00000000b,00000000b
-	db 01111000b,01001000b,00000000b,00000000b,00000000b,00000000b
-	db 01111100b,01000100b,00000000b,00000000b,00000000b,00000000b
-	db 01111110b,01000010b,00000000b,00000000b,00000000b,00000000b
-	db 01111111b,01000001b,00000000b,00000000b,00000000b,00000000b
-	db 01111111b,01000011b,10000000b,10000000b,00000000b,00000000b
-	db 01111110b,01000010b,00000000b,00000000b,00000000b,00000000b
-	db 01111111b,01011001b,00000000b,00000000b,00000000b,00000000b
-	db 01101111b,01101001b,00000000b,00000000b,00000000b,00000000b
-	db 01000111b,01000100b,10000000b,10000000b,00000000b,00000000b
-	db 00000111b,00000100b,10000000b,10000000b,00000000b,00000000b
-	db 00000011b,00000011b,00000000b,00000000b,00000000b,00000000b
-	db 00000000b,00000000b,00000000b,00000000b,00000000b,00000000b
+	db 10000000b,10000000b,00000000b,00000000b,00000000b,00000000b
+	db 11000000b,11000000b,00000000b,00000000b,00000000b,00000000b
+	db 11100000b,10100000b,00000000b,00000000b,00000000b,00000000b
+	db 11110000b,10010000b,00000000b,00000000b,00000000b,00000000b
+	db 11111000b,10001000b,00000000b,00000000b,00000000b,00000000b
+	db 11111100b,10000100b,00000000b,00000000b,00000000b,00000000b
+	db 11111110b,10000010b,00000000b,00000000b,00000000b,00000000b
+	db 11111111b,10000001b,00000000b,00000000b,00000000b,00000000b
+	db 11111111b,10000000b,10000000b,10000000b,00000000b,00000000b
+	db 11111111b,10000000b,11000000b,01000000b,00000000b,00000000b
+	db 11111111b,10000000b,11100000b,00100000b,00000000b,00000000b
+	db 11111111b,10000001b,11100000b,11100000b,00000000b,00000000b
+	db 11111111b,10001001b,00000000b,00000000b,00000000b,00000000b
+	db 11111111b,10011001b,00000000b,00000000b,00000000b,00000000b
+	db 11100111b,10100100b,10000000b,10000000b,00000000b,00000000b
+	db 11000111b,11000100b,10000000b,10000000b,00000000b,00000000b
+	db 10000011b,10000010b,11000000b,01000000b,00000000b,00000000b
+	db 00000011b,00000010b,11000000b,01000000b,00000000b,00000000b
+	db 00000001b,00000001b,10000000b,10000000b,00000000b,00000000b
 
 gfx_setup:
 	mov	ax,0x0010
 	int	0x10
 	mov	word [gfx_width],640
 	mov	word [gfx_height],350
-	mov	ax,(16*3*4 + 8*16*3*2) / 16 ; cursor behind and cursor shift data (see gfx_draw_cursor for why they need to be in the same seg)
+	mov	ax,(cursor_rows*3*4 + 8*cursor_rows*3*2 + 15) / 16 ; cursor behind and cursor shift data (see gfx_draw_cursor for why they need to be in the same seg)
 	mov	bx,sys_heap_alloc
 	int	0x20
 	or	ax,ax
@@ -42,11 +51,11 @@ gfx_set_cursor: ; input: ds = 0, si = cursor; preserves: ds, si
 	mov	ax,[gfx_cursor_seg]
 	mov	es,ax
 
-	mov	di,16*3*4
+	mov	di,cursor_rows*3*4
 	mov	bl,0
 	.loop1:
 
-	mov	cx,16*6
+	mov	cx,cursor_rows*6
 	.inner1:
 	lodsb
 
@@ -82,12 +91,12 @@ gfx_set_cursor: ; input: ds = 0, si = cursor; preserves: ds, si
 	cmp	bl,8
 	jne	.loop1
 
-	mov	di,16*3*4
+	mov	di,cursor_rows*3*4
 	mov	bl,0
 	.loop2:
 	add	di,2
 
-	mov	cx,16*6-2
+	mov	cx,cursor_rows*6-2
 	.inner2:
 	lodsb
 
@@ -147,9 +156,9 @@ gfx_draw_cursor: ; input: ds = 0; trashes: ax, bx, cx, dx, di
 
 	mov	ax,[cursor_drawn_x]
 	and	ax,7
-	mov	cx,16*3*2
+	mov	cx,cursor_rows*3*2
 	mul	cx
-	mov	si,16*3*4
+	mov	si,cursor_rows*3*4
 	add	si,ax
 
 	call	.prepare
@@ -196,7 +205,7 @@ gfx_draw_cursor: ; input: ds = 0; trashes: ax, bx, cx, dx, di
 	inc	dx
 	mov	al,ch
 	out	dx,al ; set write plane bit
-	mov	cx,16
+	mov	cx,cursor_rows
 	.loop:
 	mov	al,[bx + 0]
 	stosb
@@ -216,11 +225,11 @@ gfx_draw_cursor: ; input: ds = 0; trashes: ax, bx, cx, dx, di
 	add	bx,640/8
 	add	si,6
 	loop	.loop
-	sub	bx,640/8*16
-	sub	si,96
+	sub	bx,640/8*cursor_rows
+	sub	si,cursor_rows*6
 	ret
 
-gfx_restore_beneath_cursor: ; input: ds = 0; trashes: everything
+gfx_restore_beneath_cursor: ; input: ds = 0; preserves: ds, bp, si
 	push	ds
 	mov	dx,0x3CE
 	mov	al,0x08
@@ -247,7 +256,7 @@ gfx_restore_beneath_cursor: ; input: ds = 0; trashes: everything
 	inc	dx
 	mov	al,cl
 	out	dx,al ; set write plane bit
-	mov	cx,16
+	mov	cx,cursor_rows
 	.loop:
 	mov	al,[es:di + 0]
 	mov	[bx + 0],al
@@ -258,7 +267,7 @@ gfx_restore_beneath_cursor: ; input: ds = 0; trashes: everything
 	add	di,3
 	add	bx,640/8
 	loop	.loop
-	sub	bx,640/8*16
+	sub	bx,640/8*cursor_rows
 	ret
 
 do_draw_block:
