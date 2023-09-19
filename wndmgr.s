@@ -1,15 +1,15 @@
 ; TODO Clipping during wndmgr_repaint_item.
-; TODO Make a copy of the window description.
-; TODO Moving and resizing windows.
-; TODO Removing button push flag when mouse not within bounds.
+; TODO Moving, resizing and activating windows.
+; TODO Handling when both mouse buttons are pressed at the same time.
 
-wnd_description equ 0x00
-wnd_l           equ 0x02
-wnd_r           equ 0x04
-wnd_t           equ 0x06
-wnd_b           equ 0x08
-wnd_segment     equ 0x0A
-wnd_sz          equ 0x10
+wnd_l       equ 0x00
+wnd_r       equ 0x02
+wnd_t       equ 0x04
+wnd_b       equ 0x06
+wnd_segment equ 0x08
+wnd_extra   equ 0x0A
+wnd_sz      equ 0x10
+; item description follows
 
 input_event_type equ 0x00
 input_event_data equ 0x01
@@ -49,9 +49,7 @@ wndmgr_send_callback: ; input: ax = window, es:bx = item, cx = message code, dx 
 	mov	ax,[es:wnd_segment]
 	mov	ds,ax
 	push	ax
-	mov	ax,[es:wnd_description]
-	mov	es,ax
-	mov	ax,[es:wnd_desc_callback]
+	mov	ax,[es:wnd_sz + wnd_desc_callback]
 	push	ax
 
 	mov	ax,bp
@@ -76,6 +74,7 @@ class_button:
 	jmp	wndmgr_process_input_event.after_left_down
 
 	.on_left_up: ; input: ax = window, es:bx = item, ds = 0; trashes: everything except ds
+	call	.update_push
 	test	word [es:bx + wnd_item_flags],wnd_item_flag_pushed
 	jz	.sent_click
 	and	word [es:bx + wnd_item_flags],~wnd_item_flag_pushed
@@ -84,11 +83,20 @@ class_button:
 	call	wndmgr_repaint_item
 	pop	ax
 	pop	bx
-	mov	cx,msg_clicked
+	mov	cx,msg_btn_clicked
 	mov	dx,[es:bx + wnd_item_id]
 	call	wndmgr_send_callback
 	.sent_click:
 	jmp	wndmgr_process_input_event.after_left_up
+
+	.on_mouse_drag: ; input: ax = window, es:bx = item, ds = 0; trashes: everything except ds
+	mov	si,[es:bx + wnd_item_flags]
+	call	.update_push
+	cmp	si,[es:bx + wnd_item_flags]
+	je	.no_push_change
+	call	wndmgr_repaint_item
+	.no_push_change:
+	jmp	wndmgr_process_input_event.after_mouse_drag
 
 	.on_draw: ; input: ds = 0, es:si = item, di = .itemrect, ds = 0; preserves: ds, es, si, bp
 	mov	bx,sys_draw_frame
@@ -107,6 +115,27 @@ class_button:
 	.not_pushed2:
 	xor	ax,ax
 	jmp	wndmgr_repaint.draw_text_centered
+
+	.update_push: ; preserves si
+	and	word [es:bx + wnd_item_flags],~wnd_item_flag_pushed
+	mov	cx,[cursor_x_sync]
+	mov	dx,[cursor_y_sync]
+	push	es
+	mov	es,ax
+	sub	cx,[es:wnd_l]
+	sub	dx,[es:wnd_t]
+	pop	es
+	cmp	cx,[es:bx + wnd_item_l]
+	jl	.not_pushed3
+	cmp	cx,[es:bx + wnd_item_r]
+	jge	.not_pushed3
+	cmp	dx,[es:bx + wnd_item_t]
+	jl	.not_pushed3
+	cmp	dx,[es:bx + wnd_item_b]
+	jge	.not_pushed3
+	or	word [es:bx + wnd_item_flags],wnd_item_flag_pushed
+	.not_pushed3:
+	ret
 
 class_wndtitle:
 	.on_draw:
@@ -162,6 +191,12 @@ class_custom:
 	call	wndmgr_send_callback
 	jmp	wndmgr_process_input_event.after_left_up
 
+	.on_mouse_drag:
+	mov	cx,msg_custom_drag
+	mov	dx,[es:bx + wnd_item_id]
+	call	wndmgr_send_callback
+	jmp	wndmgr_process_input_event.after_mouse_drag
+
 	.on_draw:
 	push	si
 	mov	ax,cx
@@ -190,7 +225,27 @@ wndmgr_setup:
 
 ;	mov	bx,100
 ;	mov	[cursor_x],bx
-;	mov	bx,180
+;	mov	bx,60
+;	mov	[cursor_y],bx
+;	mov	bx,input_event_type_left_down
+;	call	wndmgr_push_input_event
+;	mov	bx,input_event_type_left_up
+;	call	wndmgr_push_input_event
+;	mov	bx,input_event_type_left_down
+;	call	wndmgr_push_input_event
+;	mov	bx,input_event_type_left_up
+;	call	wndmgr_push_input_event
+;	mov	bx,200
+;	mov	[cursor_x],bx
+;	mov	bx,200
+;	mov	[cursor_y],bx
+;	mov	bx,input_event_type_left_down
+;	call	wndmgr_push_input_event
+;	mov	bx,input_event_type_left_up
+;	call	wndmgr_push_input_event
+;	mov	bx,160
+;	mov	[cursor_x],bx
+;	mov	bx,160
 ;	mov	[cursor_y],bx
 ;	mov	bx,input_event_type_left_down
 ;	call	wndmgr_push_input_event
@@ -223,9 +278,14 @@ wndmgr_event_loop:
 	mov	bx,[cursor_y]
 	mov	[cursor_drawn_x],ax
 	mov	[cursor_drawn_y],bx
+	mov	[cursor_x_sync],ax
+	mov	[cursor_y_sync],bx
 	call	gfx_draw_cursor
 	sti
-	jmp	.loop
+	mov	bx,[hot_item]
+	or	bx,bx
+	jz	.loop
+	jmp	wndmgr_process_input_event.on_mouse_drag
 
 wndmgr_process_input_event: ; input: ds = 0; trashes: all except ds
 	cli
@@ -278,8 +338,6 @@ wndmgr_process_input_event: ; input: ds = 0; trashes: all except ds
 	jz	.no_event
 	mov	ax,[hot_window]
 	mov	es,ax
-	mov	cx,[es:wnd_description]
-	mov	es,cx
 	mov	cl,[es:bx + wnd_item_code]
 	cmp	cl,wnd_item_code_button
 	je	class_button.on_left_down
@@ -294,14 +352,14 @@ wndmgr_process_input_event: ; input: ds = 0; trashes: all except ds
 	jz	.no_event
 	mov	ax,[hot_window]
 	mov	es,ax
-	mov	cx,[es:wnd_description]
-	mov	es,cx
 	mov	cl,[es:bx + wnd_item_code]
 	cmp	cl,wnd_item_code_button
 	je	class_button.on_left_up
 	cmp	cl,wnd_item_code_custom
 	je	class_custom.on_left_up
 	.after_left_up:
+	xor	bx,bx
+	mov	[hot_item],bx
 	ret
 
 	.on_right_down:
@@ -311,8 +369,6 @@ wndmgr_process_input_event: ; input: ds = 0; trashes: all except ds
 	jz	.no_event
 	mov	ax,[hot_window]
 	mov	es,ax
-	mov	cx,[es:wnd_description]
-	mov	es,cx
 	mov	cl,[es:bx + wnd_item_code]
 	cmp	cl,wnd_item_code_custom
 	je	class_custom.on_right_down
@@ -325,13 +381,25 @@ wndmgr_process_input_event: ; input: ds = 0; trashes: all except ds
 	jz	.no_event
 	mov	ax,[hot_window]
 	mov	es,ax
-	mov	cx,[es:wnd_description]
-	mov	es,cx
 	mov	cl,[es:bx + wnd_item_code]
 	cmp	cl,wnd_item_code_custom
 	je	class_custom.on_right_up
 	.after_right_up:
+	xor	bx,bx
+	mov	[hot_item],bx
 	ret
+
+	.on_mouse_drag:
+	mov	bx,[hot_item]
+	mov	ax,[hot_window]
+	mov	es,ax
+	mov	cl,[es:bx + wnd_item_code]
+	cmp	cl,wnd_item_code_button
+	je	class_button.on_mouse_drag
+	cmp	cl,wnd_item_code_custom
+	je	class_custom.on_mouse_drag
+	.after_mouse_drag:
+	jmp	wndmgr_event_loop.loop
 
 	.find_item_under_cursor:
 	mov	ax,[window_list]
@@ -353,9 +421,7 @@ wndmgr_process_input_event: ; input: ds = 0; trashes: all except ds
 	cmp	bx,[es:wnd_b]
 	jge	.find_item_under_cursor_window_loop
 	mov	[hot_window],ax
-	mov	ax,[es:wnd_description]
-	mov	es,ax
-	mov	si,wnd_desc_sz
+	mov	si,wnd_sz + wnd_desc_sz
 	.find_item_under_cursor_item_loop:
 	mov	al,[es:si + wnd_item_code]
 	or	al,al
@@ -611,9 +677,7 @@ wndmgr_repaint: ; input: bx = draw background, ds = 0; preserves: everything
 	mov	cx,frame_window
 	int	0x20
 
-	mov	ax,[es:wnd_description]
-	mov	es,ax
-	mov	si,wnd_desc_sz
+	mov	si,wnd_sz + wnd_desc_sz
 
 	.draw_window_item:
 	mov	al,[es:si + wnd_item_code]
@@ -700,9 +764,7 @@ wndmgr_grow_items: ; input: ax = window, bx = shrink flag, ds = 0; preserves: ev
 	.do_loop:
 	sub	bx,wnd_client_off_x * 2
 	sub	cx,wnd_client_off_x + wnd_client_off_y
-	mov	ax,[es:wnd_description]
-	mov	es,ax
-	mov	si,wnd_desc_sz
+	mov	si,wnd_sz + wnd_desc_sz
 	.item_loop:
 	mov	al,[es:si]
 	or	al,al
@@ -757,46 +819,86 @@ do_wnd_destroy:
 do_wnd_create:
 	mov	bx,sp
 	mov	bx,[ss:bx + 2]
+	push	di
+	push	si
+	push	cx
+	push	dx
 	push	ds
 	push	es
 	push	bx
-	xor	bx,bx
-	mov	ds,bx
-	mov	cx,ax
+	mov	si,ax
+	mov	bx,wnd_desc_sz
+	add	bx,si
+	.get_size_loop:
+	mov	al,[bx + wnd_item_code]
+	or	al,al
+	jz	.got_size
+	mov	al,[bx + wnd_item_strlen]
+	xor	ah,ah
+	add	bx,ax
+	add	bx,wnd_item_string
+	jmp	.get_size_loop
+	.got_size:
+	inc	bx
+	sub	bx,si
+	mov	cx,bx
+	add	bx,15
+	shr	bx,1
+	shr	bx,1
+	shr	bx,1
+	shr	bx,1
 	mov	ax,wnd_sz / 16
+	add	ax,bx
+	mov	dx,ax
+	add	ax,[si + wnd_desc_extra]
 	mov	bx,sys_heap_alloc
 	int	0x20
+	xor	bx,bx
+	mov	ds,bx
 	pop	bx
 	or	ax,ax
 	jz	.return
 	mov	es,ax
+	add	dx,ax
 	mov	[es:wnd_segment],bx
-	mov	[es:wnd_description],cx
 	mov	bx,ax
 	mov	ax,[.cascade]
 	add	word [.cascade],50
 	mov	word [es:wnd_l],ax
 	mov	word [es:wnd_t],ax
-	add	ax,200
-	mov	word [es:wnd_r],ax
-	mov	word [es:wnd_b],ax
+	mov	word [es:wnd_extra],dx
 	mov	ax,[window_list]
 	call	dll_insert_end
 	mov	ax,bx
+	pop	bx
+	pop	ds
+	push	ds
+	push	bx
+	mov	di,wnd_sz
+	rep	movsb
+	mov	bx,word [es:wnd_l]
+	add	bx,[es:wnd_sz + wnd_desc_iwidth]
+	mov	word [es:wnd_r],bx
+	mov	bx,word [es:wnd_t]
+	add	bx,[es:wnd_sz + wnd_desc_iheight]
+	mov	word [es:wnd_b],bx
 	xor	bx,bx
+	mov	ds,bx
 	call	wndmgr_grow_items
 	call	wndmgr_repaint
 	.return:
 	pop	es
 	pop	ds
+	pop	dx
+	pop	cx
+	pop	si
+	pop	di
 	iret
 	.cascade: dw 20
 
 wndmgr_find_item: ; input: ax = window, dx = item; output: es:si = description of item, cf = not found
 	mov	es,ax
-	mov	ax,[es:wnd_description]
-	mov	es,ax
-	mov	si,wnd_desc_sz
+	mov	si,wnd_sz + wnd_desc_sz
 	.loop:
 	mov	al,[es:si + wnd_item_code]
 	or	al,al
@@ -815,6 +917,12 @@ wndmgr_find_item: ; input: ax = window, dx = item; output: es:si = description o
 	.found:
 	clc
 	ret
+
+do_wnd_get_extra:
+	mov	es,ax
+	mov	bx,[es:wnd_extra]
+	mov	es,bx
+	iret
 
 do_wnd_redraw:
 	push	cx
@@ -846,6 +954,8 @@ do_wndmgr_syscall:
 	jz	do_wnd_destroy
 	dec	bl
 	jz	do_wnd_redraw
+	dec	bl
+	jz	do_wnd_get_extra
 	jmp	exception_handler
 
 window_list: dw 0

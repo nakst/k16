@@ -14,9 +14,9 @@ start:
 	mov	ax,[heap_start]
 	cli
 	mov	ss,ax
-	mov	sp,0x100
+	mov	sp,0x200
 	sti
-	add	ax,0x10 ; 256 bytes
+	add	ax,0x20 ; 512 bytes
 	mov	[heap_start],ax
 
 	.write_ivt:
@@ -48,12 +48,52 @@ start:
 	call	gfx_setup
 	call	wndmgr_setup
 
-	mov	si,.test_file_path
+	mov	si,.desktop_path
+	mov	bx,sys_app_start
+	int	0x20
+	or	ax,ax
+	jz	wndmgr_event_loop
+	mov	ax,.desktop_load_error
+	mov	bx,sys_wnd_create
+	int	0x20
+	jmp	wndmgr_event_loop
+
+	.desktop_path: db 'desktop.exe',0
+	.desktop_load_error:
+		wnd_start 'System Error', .desktop_load_error_callback, 0, 200, 100
+		add_static 10, 180, 10, 35, 0, 0, 'Missing system file "desktop.exe".'
+		add_static 10, 100, 35, 60, 0, 0, 'Please restart your computer.'
+		wnd_end
+	.desktop_load_error_callback: iret
+
+%include "heap.s"
+%include "diskio.s"
+%include "gfx.s"
+%include "mouse.s"
+%include "wndmgr.s"
+
+do_app_start:
+	push	dx
 	mov	al,open_access_read
 	mov	bx,sys_file_open
 	int	0x20
+	or	ax,ax
+	jz	.opened
+	pop	dx
+	iret
+
+	.opened:
+	push	es
 	mov	es,dx
-	; TODO Check high size is 0.
+	mov	ax,[es:file_ctrl_size_high]
+	or	ax,ax
+	jz	.not_too_large
+	mov	ax,error_too_large
+	pop	es
+	pop	dx
+	iret
+
+	.not_too_large:
 	mov	ax,[es:file_ctrl_size_low]
 	add	ax,15
 	shr	ax,1
@@ -62,39 +102,59 @@ start:
 	shr	ax,1
 	mov	bx,sys_heap_alloc
 	int	0x20
+	or	ax,ax
+	jnz	.allocated
+	mov	ax,error_no_memory
+	pop	es
+	pop	dx
+	iret
+
+	.allocated:
+	mov	si,ax ; si = segment
+	push	cx
+	push	di
+	push	ds
 	xor	di,di
-	mov	[.test_segment],ax
 	mov	ds,ax
 	mov	cx,[es:file_ctrl_size_low]
 	mov	bx,sys_file_read
 	int	0x20
 	mov	bx,sys_file_close
 	int	0x20
+	pop	ds
+	pop	di
+	pop	cx
+	pop	es
+	pop	dx
+	or	ax,ax
+	jz	.read_done
+	iret
 
+	.read_done:
+	push	cx
+	push	dx
+	push	di
+	push	bp
+	push	es
+	pushf
 	xor	ax,ax
-	mov	ds,ax
-	pushf
-	push	ds
-	mov	ax,wndmgr_event_loop
+	push	ax
+	mov	ax,.after
 	push	ax
 	pushf
-	mov	ax,[.test_segment]
-	mov	ds,ax
-	push	ax
+	mov	ds,si
+	push	si
 	xor	ax,ax
 	push	ax
 	iret
 
-	jmp	$
-
-	.test_file_path: db 'test.exe',0
-	.test_segment: dw 0
-
-%include "heap.s"
-%include "diskio.s"
-%include "gfx.s"
-%include "mouse.s"
-%include "wndmgr.s"
+	.after:
+	pop	es
+	pop	bp
+	pop	di
+	pop	dx
+	pop	cx
+	iret
 
 exception_handler:
 	cli
@@ -128,11 +188,18 @@ print_cstring:
 	pop	bx
 	ret
 
+do_misc_syscall:
+	or	bl,bl
+	jz	do_display_word
+	dec	bl
+	jz	do_app_start
+	jmp	exception_handler
+
 int_0x20:
 	cld
 	sti
 	or	bh,bh
-	jz	do_display_word
+	jz	do_misc_syscall
 	dec	bh
 	jz	do_heap_syscall
 	dec	bh

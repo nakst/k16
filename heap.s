@@ -146,8 +146,13 @@ heap_setup:
 	ret
 
 heap_walk:
-	; the heap is a doubly linked list
-	; each entry has a header of: dw previous, dw next, dw status
+	push	ax
+	push	bx
+	push	cx
+	push	dx
+	push	si
+	push	di
+	push	es
 	mov	bx,[heap_start]
 	mov	es,bx
 	xor	cx,cx
@@ -177,6 +182,13 @@ heap_walk:
 	jnz	.loop
 	mov	si,.newline_string
 	call	print_cstring
+	pop	es
+	pop	di
+	pop	si
+	pop	dx
+	pop	cx
+	pop	bx
+	pop	ax
 	ret
 	.corrupt:
 	mov	si,.corrupt_string

@@ -11,12 +11,6 @@ id_custom      equ 4
 
 start:
 	mov	ax,window_description
-	shr	ax,1
-	shr	ax,1
-	shr	ax,1
-	shr	ax,1
-	mov	bx,cs
-	add	ax,bx
 	mov	bx,sys_wnd_create
 	int	0x20
 
@@ -45,12 +39,20 @@ start:
 	iret
 
 window_callback:
-	cmp	cx,msg_clicked
+	cmp	cx,msg_btn_clicked
 	je	.clicked
 	cmp	cx,msg_custom_draw
 	je	.draw
 	cmp	cx,msg_custom_mouse
 	je	.mouse
+	cmp	cx,msg_custom_drag
+	je	.drag
+	iret
+
+	.drag:
+	mov	ax,0x1234
+	mov	bx,sys_display_word
+	int	0x20
 	iret
 
 	.mouse:
@@ -95,22 +97,20 @@ window_callback:
 	iret
 
 	.ok:
-	mov	ax,[alert_handle]
+	mov	bx,sys_wnd_get_extra
+	int	0x20
+	mov	ax,[es:0]
 	mov	bx,sys_wnd_destroy
 	int	0x20
 	iret
 
 	.push:
 	mov	ax,alert_description
-	shr	ax,1
-	shr	ax,1
-	shr	ax,1
-	shr	ax,1
-	mov	bx,cs
-	add	ax,bx
 	mov	bx,sys_wnd_create
 	int	0x20
-	mov	[alert_handle],ax
+	mov	bx,sys_wnd_get_extra
+	int	0x20
+	mov	[es:0],ax
 	iret
 
 	.return:
@@ -119,20 +119,17 @@ window_callback:
 test_file_path: db '38.txt',0
 test_file_path_2: db 'invalid.txt',0
 test_file_output: times 16 db 0
-alert_handle: dw 0
 custom_color: db 0
 
-	align 512 ; this only needs to be 16-byte aligned, but we're testing reading large files
 window_description:
-	wnd_start 'Test Application', window_callback
+	wnd_start 'Test Application', window_callback, 0, 230, 200
 	add_button 10, 100, 10, 35, id_push, 0, 'Push'
 	add_custom 10, -10, 80, -10, id_custom, wnd_item_flag_grow_r | wnd_item_flag_grow_b, 'Custom'
 	add_button 10, 100, 45, 70, id_two_of_them, 0, 'Two of them'
 	wnd_end
 
-	align 16
 alert_description:
-	wnd_start 'Alert', window_callback
-	add_static 20, 180, 20, 45, 0, 0, 'You clicked the button.'
-	add_button 20, 100, 20 + 30, 45 + 30, id_ok, 0, 'OK'
+	wnd_start 'Alert', window_callback, 2, 200, 100
+	add_static 10, 180, 10, 35, 0, 0, 'You clicked the button.'
+	add_button 10, 100, 10 + 25, 35 + 25, id_ok, 0, 'OK'
 	wnd_end

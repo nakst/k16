@@ -32,10 +32,13 @@ cursor_arrow:
 	db 00000001b,00000001b,10000000b,10000000b,00000000b,00000000b
 
 gfx_setup:
+	.set_mode:
 	mov	ax,0x0010
 	int	0x10
 	mov	word [gfx_width],640
 	mov	word [gfx_height],350
+
+	.set_cursor:
 	mov	ax,(cursor_rows*3*4 + 8*cursor_rows*3*2 + 15) / 16 ; cursor behind and cursor shift data (see gfx_draw_cursor for why they need to be in the same seg)
 	mov	bx,sys_heap_alloc
 	int	0x20
@@ -44,7 +47,18 @@ gfx_setup:
 	mov	[gfx_cursor_seg],ax
 	mov	si,cursor_arrow
 	call	gfx_set_cursor
+
+	.set_palette:
+	mov	ax,0x1002
+	mov	dx,.palette
+	xor	bx,bx
+	mov	es,bx
+	int	0x10
+
+	.return:
 	ret
+
+	.palette: db 0x00, 0x01, 0x02, 0x23, 0x04, 0x05, 0x06, 0x07, 0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F
 
 gfx_set_cursor: ; input: ds = 0, si = cursor; preserves: ds, si
 	mov	bp,si

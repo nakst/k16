@@ -1,9 +1,10 @@
-; TODO Test sys_heap_alloc and sys_file_open work with a different DS value than the system's.
+; TODO Test sys_heap_alloc works with a different DS value than the system's.
 ; TODO Color management; color settings.
 
 ; to make a system call, put the number in bx, cld, and then int 0x20
 ; all inputs (including bx) and flags are scratch registers unless otherwise noted!
 sys_display_word   equ 0x0000 ; input: ax = value to print
+sys_app_start      equ 0x0001 ; input: si = cstr path; output: ax = error code, si = result from app (trashed if error)
 sys_heap_alloc     equ 0x0100 ; input: ax = memory units to alloc (multiples of 16 bytes); output: ax = offset in memory units or 0 on error
 sys_heap_free      equ 0x0101 ; input: ax = offset in memory units
 sys_file_open      equ 0x0200 ; input: al = access mode, si = cstr path; output: ax = error code, dx = handle (trashed if error)
@@ -14,9 +15,10 @@ sys_draw_block     equ 0x0300 ; input: cl = color, di = rect; preserves: cl, di
 sys_draw_frame     equ 0x0301 ; input: cx = style, di = rect; preserves: cx, di
 sys_draw_text      equ 0x0302 ; input: ah = color, al = bold flag, cx = x pos, dx = y pos, si = cstr; preserves: ax, cx, dx, si
 sys_measure_text   equ 0x0303 ; input: al = bold flag, [ds:]si = cstr, [es:]di = out rect; preserves: al, si, di
-sys_wnd_create     equ 0x0400 ; input: ax = offset in memory units to window description (must remain valid); output: ax = handle (0 if error)
-sys_wnd_destroy    equ 0x0401 ; input: ax = handle
+sys_wnd_create     equ 0x0400 ; input: ax = window description; output: ax = handle (0 if error)
+sys_wnd_destroy    equ 0x0401 ; input: ax = window handle
 sys_wnd_redraw     equ 0x0402 ; input: ax = window handle, dx = item id
+sys_wnd_get_extra  equ 0x0403 ; input: ax = window handle; output: es = extra segment; preserves: ax
 
 error_none      equ 0x00
 error_corrupt   equ 0x01
@@ -26,6 +28,7 @@ error_bad_name  equ 0x04
 error_no_memory equ 0x05
 error_eof       equ 0x06
 error_exists    equ 0x07
+error_too_large equ 0x08
 
 open_access_read                  equ 0x00
 ; open_access_truncate            equ 0x01
@@ -78,12 +81,16 @@ wnd_item_code_static equ 0x03
 wnd_item_code_custom equ 0x04
 
 wnd_desc_callback equ 0x00
-wnd_desc_sz       equ 0x02
+wnd_desc_extra    equ 0x02 ; extra memory to allocate, access with sys_wnd_get_extra
+wnd_desc_iwidth   equ 0x04
+wnd_desc_iheight  equ 0x06
+wnd_desc_sz       equ 0x08
 
-msg_clicked      equ 0x0001 ; ax = window, dx = id
+msg_btn_clicked  equ 0x0001 ; ax = window, dx = id
 msg_custom_draw  equ 0x0002 ; ax = window, dx = id, si = rect segment, di = rect
 msg_custom_mouse equ 0x0003 ; ax = window, dx = id, si = [bit 0 = down, bit 1 = button]
-; TODO msg_resize, msg_move, msg_close, msg_custom_drag
+msg_custom_drag  equ 0x0004 ; ax = window, dx = id
+; TODO msg_resize, msg_move, msg_close
 
 %macro add_wnditem 8 ; type, left, right, top, bottom, id, flags, string
 	db	%1
@@ -109,8 +116,11 @@ msg_custom_mouse equ 0x0003 ; ax = window, dx = id, si = [bit 0 = down, bit 1 = 
 	add_wnditem wnd_item_code_custom, %1, %2, %3, %4, %5, %6, %7
 %endmacro
 
-%macro wnd_start 2 ; title, callback
+%macro wnd_start 5 ; title, callback, extra bytes, init width, init height
 	dw	%2
+	dw	(%3 + 15) / 16
+	dw	%4
+	dw	%5
 	add_wnditem wnd_item_code_title, 0, 0, -20, -2, 0, wnd_item_flag_grow_r, %1
 %endmacro
 

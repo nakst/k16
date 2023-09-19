@@ -10,7 +10,7 @@
 // 	sector usage table is made of 720 WORDs, one per sector
 // 		0xFFFF = unused, 0xFFFE = end of file, 0xFFFD = metadata, 0x0000 = does not exist
 // 		otherwise points to next sector in file
-// 	boot sectors ends with 'k16fs', sector usage table size in sector (1 byte), 55, AA
+// 	boot sectors ends with 'k16fs', sector usage table size in sectors (1 byte), 55, AA
 // 	root directory starts after the metadata sectors
 // 	28 directory entries per sector, last 8 bytes are the signature 'k16fsdir'
 
