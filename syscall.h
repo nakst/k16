@@ -16,6 +16,7 @@ sys_draw_text      equ 0x0302 ; input: ah = color, al = bold flag, cx = x pos, d
 sys_measure_text   equ 0x0303 ; input: al = bold flag, [ds:]si = cstr, [es:]di = out rect; preserves: al, si, di
 sys_wnd_create     equ 0x0400 ; input: ax = offset in memory units to window description (must remain valid); output: ax = handle (0 if error)
 sys_wnd_destroy    equ 0x0401 ; input: ax = handle
+sys_wnd_redraw     equ 0x0402 ; input: ax = window handle, dx = item id
 
 error_none      equ 0x00
 error_corrupt   equ 0x01
@@ -51,6 +52,7 @@ rect_b  equ 0x06
 rect_sz equ 0x08
 
 frame_3d_out equ 0x870F
+frame_3d_in  equ 0x70F8
 frame_pushed equ 0x8800
 frame_window equ 0x8F07
 
@@ -65,15 +67,23 @@ wnd_item_flags  equ 0x0C
 wnd_item_string equ 0x0E ; size is 0x0E + length of string
 
 wnd_item_flag_pushed equ (1 << 0)
+wnd_item_flag_grow_l equ (1 << 1) ; l is an offset from the right side of the window
+wnd_item_flag_grow_r equ (1 << 2) ; r is an offset from the right side of the window
+wnd_item_flag_grow_t equ (1 << 3) ; t is an offset from the bottom side of the window
+wnd_item_flag_grow_b equ (1 << 4) ; b is an offset from the bottom side of the window
 
 wnd_item_code_button equ 0x01
 wnd_item_code_title  equ 0x02
 wnd_item_code_static equ 0x03
+wnd_item_code_custom equ 0x04
 
 wnd_desc_callback equ 0x00
 wnd_desc_sz       equ 0x02
 
-msg_clicked equ 0x0001
+msg_clicked      equ 0x0001 ; ax = window, dx = id
+msg_custom_draw  equ 0x0002 ; ax = window, dx = id, si = rect segment, di = rect
+msg_custom_mouse equ 0x0003 ; ax = window, dx = id, si = [bit 0 = down, bit 1 = button]
+; TODO msg_resize, msg_move, msg_close, msg_custom_drag
 
 %macro add_wnditem 8 ; type, left, right, top, bottom, id, flags, string
 	db	%1
@@ -87,20 +97,21 @@ msg_clicked equ 0x0001
 	db	%8,0
 %endmacro
 
-wnd_client_off_x equ 4
-wnd_client_off_y equ 24
-
 %macro add_button 7 ; left, right, top, bottom, id, flags, string
-	add_wnditem wnd_item_code_button, %1 + wnd_client_off_x, %2 + wnd_client_off_x, %3 + wnd_client_off_y, %4 + wnd_client_off_y, %5, %6, %7
+	add_wnditem wnd_item_code_button, %1, %2, %3, %4, %5, %6, %7
 %endmacro
 
 %macro add_static 7 ; left, right, top, bottom, id, flags, string
-	add_wnditem wnd_item_code_static, %1 + wnd_client_off_x, %2 + wnd_client_off_x, %3 + wnd_client_off_y, %4 + wnd_client_off_y, %5, %6, %7
+	add_wnditem wnd_item_code_static, %1, %2, %3, %4, %5, %6, %7
+%endmacro
+
+%macro add_custom 7 ; left, right, top, bottom, id, flags, string
+	add_wnditem wnd_item_code_custom, %1, %2, %3, %4, %5, %6, %7
 %endmacro
 
 %macro wnd_start 2 ; title, callback
 	dw	%2
-	add_wnditem wnd_item_code_title, 4, -4, 4, 4 + 18, -1, 0, %1
+	add_wnditem wnd_item_code_title, 0, 0, -20, -2, 0, wnd_item_flag_grow_r, %1
 %endmacro
 
 %macro wnd_end 0
