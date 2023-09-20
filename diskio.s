@@ -7,78 +7,6 @@ disk_buf_dirty     equ 0x04 ; 1 if being written
 disk_buf_header_sz equ 0x10 ; must be multiple of 16
 ; TODO invalidating buffers after 2 seconds for external disks
 
-dirent_name        equ  0
-dirent_attributes  equ 11
-dirent_first_sect  equ 12
-dirent_size_low    equ 14
-dirent_size_high   equ 16
-dirent_sz          equ 18
-dirents_per_sector equ 28
-dirent_name_sz     equ 11
-
-convert_name_to_8_3: ; es:si = cstr; trashes ax, bx, cx, di
-	xor	bx,bx
-	xor	di,di
-	mov	ax,error_bad_name
-	.name_loop:
-	mov	cl,[es:si + bx]
-	cmp	cl,' '
-	je	.return
-	cmp	cl,0
-	je	.pad_to_11
-	cmp	cl,'.'
-	je	.convert_extension
-	cmp	bx,8
-	je	.return
-	call	.to_lower
-	mov	[.name_buf + bx],cl
-	inc	bx
-	inc	di
-	jmp	.name_loop
-	.pad_to_11:
-	xor	ax,ax
-	cmp	di,dirent_name_sz
-	je	.return
-	mov	byte [.name_buf + di],' '
-	inc	di
-	jmp	.pad_to_11
-	.convert_extension:
-	inc	bx
-	.pad_before_extension:
-	cmp	di,8
-	je	.extension_loop
-	mov	byte [.name_buf + di],' '
-	inc	di
-	jmp	.pad_before_extension
-	.extension_loop:
-	mov	cl,[es:si + bx]
-	cmp	cl,' '
-	je	.return
-	cmp	cl,0
-	je	.pad_to_11
-	cmp	cl,'.'
-	je	.return
-	cmp	di,dirent_name_sz
-	je	.return
-	call	.to_lower
-	mov	[.name_buf + di],cl
-	inc	bx
-	inc	di
-	jmp	.extension_loop
-	.return:
-	ret
-
-	.to_lower:
-	cmp	cl,'A'
-	jb	.not_upper
-	cmp	cl,'Z'
-	ja	.not_upper
-	add	cl,'a'-'A'
-	.not_upper:
-	ret
-
-	.name_buf: db '...........',0
-
 fs_next_sector: ; input: ax = sector, dl = drive number; output: ax = sector (0 if error); preserves: dl
 	push	bx
 	push	dx
@@ -101,27 +29,95 @@ fs_next_sector: ; input: ax = sector, dl = drive number; output: ax = sector (0 
 	ret
 
 do_file_open:
-	; TODO Recursing into directories.
-	; TODO Other disks.
-	; TODO When writing, check the file isn't already open.
+	mov	dx,open_parent_root
+	.loop:
+	mov	bx,si
+	push	ax
+	.find_type:
+	lodsb
+	or	al,al
+	jz	.file
+	cmp	al,':'
+	je	.directory
+	jmp	.find_type
+	.file:
+	pop	ax
+	mov	si,bx
+	mov	bx,sys_file_open
+	jmp	do_file_open_at
+	.directory:
+	pop	ax
+	dec	si
+	mov	byte [si],0
+	push	si
+	mov	si,bx
+	push	ax
+	mov	al,open_access_directory
+	mov	bx,sys_file_open_at
+	int	0x20
+	pop	bx
+	pop	si
+	mov	byte [si],':'
+	inc	si
+	or	ax,ax
+	jnz	.error
+	mov	ax,bx
+	jmp	.loop
+	.error:
+	iret
 
+do_file_open_at:
+	; TODO Other disks (open_parent_root).
+	; TODO Check the file isn't already open for exclusive access.
+
+	push	es
 	push	di
 	push	bx
 	push	cx
-	mov	bx,ds
+
+	xor	bx,bx
 	mov	es,bx
-	push	bx
+	mov	[es:.access_mode],al
+	mov	[es:.parent_to_close],dx
+
+	.load_name:
+	mov	di,.entry_buf + dirent_name
+	mov	cx,dirent_name_sz
+	lodsb
+	or	al,al
+	jz	.bad_name
+	.load_name_loop:
+	cmp	al,':'
+	je	.bad_name
+	stosb
+	lodsb
+	or	al,al
+	jz	.load_name_done
+	loop	.load_name_loop
+	.bad_name:
+	push	ds
+	mov	ax,error_bad_name
+	jmp	.return
+	.load_name_done:
+	dec	cx
+	rep	stosb
+
+	push	ds
 	xor	bx,bx
 	mov	ds,bx
+	cmp	dx,open_parent_root
+	je	.at_root
+	cmp	dx,0xF000
+	jb	.at_directory
+	jmp	exception_handler
 
-	.convert_name:
-	call	convert_name_to_8_3
-	or	ax,ax
-	jnz	.return
-
-	.find_root_directory_start:
+	.at_root:
+	mov	ax,error_not_found ; TODO Parsing disk number.
+	mov	bx,[.entry_buf + dirent_name]
+	cmp	bx,'s'
+	jne	.return
+	mov	dl,[.disk_number]
 	mov	ax,1
-	mov	dl,[system_drive_number]
 	call	disk_buffers_read
 	mov	ax,error_disk_io
 	jc	.return
@@ -136,26 +132,36 @@ do_file_open:
 	jmp	.find_root_directory_start_loop
 	.found_root_directory_start:
 	shr	bx,1
-	mov	[.current_sector],bx
+	xor	ax,ax
+	mov	es,ax
+	mov	[.current_sector],ax
+	mov	[es:.entry_buf + dirent_first_sect],bx
+	mov	[es:.entry_buf + dirent_size_low],ax
+	mov	byte [es:.entry_buf + dirent_attributes],dentry_attr_dir | dentry_attr_present
+	mov	byte [es:.entry_buf + dirent_size_high],0
+	mov	bx,.entry_buf
+	jmp	.match_found
 
-	.scan_root_directory:
+	.at_directory:
+	mov	es,dx
+	mov	bl,[es:file_ctrl_drive]
+	mov	[.disk_number],bl
+	mov	bx,[es:file_ctrl_first_sector]
+	mov	[.current_sector],bx
+	.scan_directory:
 	mov	ax,[.current_sector]
-	mov	dl,[system_drive_number]
+	mov	dl,[.disk_number]
 	call	disk_buffers_read
 	mov	ax,error_disk_io
 	jc	.return
-	mov	ax,[es:0x1F8]
-	cmp	ax,'k' | ('1' << 8)
-	mov	ax,error_corrupt
-	jne	.return
 	xor	bx,bx
 	.scan_directory_entry:
 	mov	al,[es:bx + dirent_attributes]
-	test	al,1
+	test	al,dentry_attr_present
 	jz	.scan_next_entry
 	mov	cx,dirent_name_sz
 	mov	di,bx
-	mov	si,convert_name_to_8_3.name_buf
+	mov	si,.entry_buf + dirent_name
 	rep	cmpsb
 	je	.match_found
 	.scan_next_entry:
@@ -164,7 +170,7 @@ do_file_open:
 	jne	.scan_directory_entry
 	.scan_next_sector:
 	mov	ax,[.current_sector]
-	mov	dl,[system_drive_number]
+	mov	dl,[.disk_number]
 	call	fs_next_sector
 	or	ax,ax
 	jz	.error_next_disk_io
@@ -173,7 +179,7 @@ do_file_open:
 	cmp	ax,0xF000
 	ja	.error_next_corrupt
 	mov	[.current_sector],ax
-	jmp	.scan_root_directory
+	jmp	.scan_directory
 	.error_next_disk_io:
 	mov	ax,error_disk_io
 	jmp	.return
@@ -185,7 +191,18 @@ do_file_open:
 	jmp	.return
 
 	.match_found:
-	mov	cl,[system_drive_number] ; read before changing ds
+	mov	ax,error_bad_type
+	mov	ch,[.access_mode] ; read before changing ds
+	test	byte [es:bx + dirent_attributes],dentry_attr_dir
+	jz	.not_directory
+	cmp	ch,open_access_directory
+	jne	.return
+	jmp	.checked_type
+	.not_directory:
+	cmp	ch,open_access_directory
+	je	.return
+	.checked_type:
+	mov	cl,[.disk_number] ; read before changing ds
 	mov	dx,[.current_sector] ; read before changing ds
 	mov	ax,(file_ctrl_sz + 15) / 16
 	push	bx
@@ -205,25 +222,36 @@ do_file_open:
 	mov	[file_ctrl_dirent_sect],dx
 	mov	ax,[es:bx + dirent_size_low]
 	mov	[file_ctrl_size_low],ax
-	mov	ax,[es:bx + dirent_size_high]
+	xor	ah,ah
+	mov	al,[es:bx + dirent_size_high]
 	mov	[file_ctrl_size_high],ax
 	mov	[file_ctrl_drive],cl
 	mov	ax,bx
 	mov	cl,dirent_sz
 	div	cl
 	mov	[file_ctrl_dirent_index],al
-	xor	al,al
-	mov	[file_ctrl_mode],al
+	mov	[file_ctrl_mode],ch
 	xor	ax,ax
 	mov	dx,ds
+	mov	ds,ax
 	.return:
+	push	dx
+	mov	dx,[.parent_to_close]
+	mov	bx,sys_file_close
+	int	0x20
+	pop	dx
 	pop	ds
 	pop	cx
 	pop	bx
 	pop	di
+	pop	es
 	iret
 
 	.current_sector: dw 0
+	.entry_buf: times dirent_sz db 0
+	.parent_to_close: dw 0
+	.disk_number: db 0
+	.access_mode: db 0
 
 do_file_read:
 	push	dx
@@ -235,6 +263,12 @@ do_file_read:
 	xor	ax,ax
 	mov	ds,ax
 	mov	[.target_segment],bx
+
+	mov	es,dx
+	mov	al,[es:file_ctrl_mode]
+	cmp	al,open_access_read
+	mov	ax,error_bad_type
+	jne	.return
 
 	.main_loop:
 	mov	ax,error_none
@@ -315,11 +349,15 @@ do_file_read:
 	or	ax,ax
 	jz	.next_sector_error_io
 	cmp	ax,0xF000
-	ja	.next_sector_error_corrupt
+	ja	.no_next_sector
 	jmp	.compute_bytes_to_read_from_sector
 	.next_sector_error_io:
 	mov	ax,error_disk_io
 	jmp	.return
+	.no_next_sector:
+	xor	ax,ax
+	cmp	byte [.dir_mode],1
+	je	.return
 	.next_sector_error_corrupt:
 	mov	ax,error_corrupt
 	jmp	.return
@@ -333,15 +371,55 @@ do_file_read:
 	iret
 
 	.target_segment: dw 0
+	.dir_mode: db 0
 
 do_file_close:
 	push	ax
 	push	bx
+	cmp	dx,0xF000
+	jae	.no_free ; don't free pseudohandles
 	mov	ax,dx
 	mov	bx,sys_heap_free
 	int	0x20
+	.no_free:
 	pop	bx
 	pop	ax
+	iret
+
+do_dir_read:
+	push	es
+	mov	es,dx
+	mov	al,[es:file_ctrl_mode]
+	cmp	al,open_access_directory
+	jne	exception_handler
+	mov	byte [es:file_ctrl_mode],open_access_read
+	mov	word [es:file_ctrl_size_low],0xFFFF
+	xor	ax,ax
+	mov	es,ax
+	mov	byte [es:do_file_read.dir_mode],1
+	pop	es
+	shl	cx,1
+	shl	cx,1
+	shl	cx,1
+	shl	cx,1
+	shl	cx,1
+	mov	bx,sys_file_read
+	int	0x20
+	push	es
+	xor	ax,ax
+	mov	es,ax
+	mov	byte [es:do_file_read.dir_mode],1
+	mov	es,dx
+	mov	byte [es:file_ctrl_mode],open_access_directory
+	mov	cx,0xFFFF
+	sub	cx,word [es:file_ctrl_size_low]
+	shr	cx,1
+	shr	cx,1
+	shr	cx,1
+	shr	cx,1
+	shr	cx,1
+	mov	word [es:file_ctrl_size_low],0
+	pop	es
 	iret
 
 disk_read_sector: ; input: ax = sector, bx = destination / 16, dl = device; output: cf = error
@@ -495,11 +573,15 @@ disk_buffers_alloc:
 
 do_diskio_syscall:
 	or	bl,bl
-	jz	do_file_open
+	jz	do_file_open_at
 	dec	bl
 	jz	do_file_close
 	dec	bl
 	jz	do_file_read
+	dec	bl
+	jz	do_file_open
+	dec	bl
+	jz	do_dir_read
 	jmp	exception_handler
 
 system_drive_number: db 0

@@ -585,6 +585,7 @@ do_draw_block:
 	.color: db 0
 
 do_draw_frame:
+	push	ds
 	push	ax
 	push	bx
 	push	cx
@@ -659,6 +660,7 @@ do_draw_frame:
 	pop	cx
 	pop	bx
 	pop	ax
+	pop	ds
 	iret
 
 	.draw_rect_from_reg: 

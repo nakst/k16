@@ -8,6 +8,8 @@ boot_stack         equ 0x7B00 ; 0x7C00
 boot_sector        equ 0x7C00 ; 0x7E00
 sector_table       equ 0x7E00 ; 0x8400
 
+%include "syscall.h"
+
 ; dl = drive number
 start:
 	.setup_segments:
@@ -21,25 +23,25 @@ start:
 	jmp	0x0000:.set_cs
 	.set_cs:
 
-;	.fill_memory: ; fill all usable memory with 0xC1 to test we're not relying on emulator's zero initialization
-;	int	0x12
-;	mov	bx,0x40
-;	mul	bx
-;	mov	bx,ax
-;	.fill_memory_loop:
-;	dec	bx
-;	mov	cx,0x10
-;	mov	es,bx
-;	xor	di,di
-;	mov	al,0xC1
-;	rep	stosb
-;	cmp	bx,0x50
-;	je	.fill_memory_done
-;	cmp	bx,0x7E0
-;	jne	.fill_memory_loop
-;	sub	bx,0x20
-;	jmp	.fill_memory_loop
-;	.fill_memory_done:
+	.fill_memory: ; fill all usable memory with 0xC1 to test we're not relying on emulator's zero initialization
+	int	0x12
+	mov	bx,0x40
+	mul	bx
+	mov	bx,ax
+	.fill_memory_loop:
+	dec	bx
+	mov	cx,0x10
+	mov	es,bx
+	xor	di,di
+	mov	al,0xC1
+	rep	stosb
+	cmp	bx,0x50
+	je	.fill_memory_done
+	cmp	bx,0x7E0
+	jne	.fill_memory_loop
+	sub	bx,0x20
+	jmp	.fill_memory_loop
+	.fill_memory_done:
 
 	xor	ax,ax
 	mov	bx,sector_table / 16
@@ -62,7 +64,7 @@ start:
 	mov	[current_sector],bx
 	add	bx,bx
 	mov	ax,[sector_table + bx]
-	mov	si,error_file_system
+	mov	si,msg_file_system
 	cmp	ax,0xFFFF
 	je	print_error_message
 
@@ -72,43 +74,39 @@ start:
 	call	read_sector
 	xor	bx,bx
 	mov	es,bx
-	mov	si,error_file_system
-	mov	ax,[directory_buffer + 0x1F8]
-	cmp	ax,'k' | ('1' << 8)
-	jne	print_error_message
 	mov	bx,directory_buffer
 	.scan_directory_entry:
-	mov	al,[directory_buffer + 11 + bx]
-	test	al,1
+	mov	al,[directory_buffer + dirent_attributes + bx]
+	test	al,dentry_attr_present
 	jz	.scan_next_entry
-	mov	cx,11
+	mov	cx,dirent_name_sz
 	mov	si,directory_buffer
 	add	si,bx
 	mov	di,system_name
 	rep	cmpsb
 	je	.match_found
 	.scan_next_entry:
-	add	bx,18
-	cmp	bx,18 * 28
+	add	bx,dirent_sz
+	cmp	bx,dirent_sz * dirents_per_sector
 	jne	.scan_directory_entry
 	.scan_next_sector:
 	mov	bx,[current_sector]
 	add	bx,bx
 	mov	ax,[sector_table + bx]
-	mov	si,error_not_found
+	mov	si,msg_not_found
 	cmp	ax,0xFFFE
 	je	print_error_message
 	mov	[current_sector],ax
 	jmp	.scan_root_directory
 	.match_found:
-	mov	si,error_too_large
-	mov	ax,[directory_buffer + 16 + bx]
-	or	ax,ax
+	mov	si,msg_too_large
+	mov	al,[directory_buffer + dirent_size_high + bx]
+	or	al,al
 	jnz	print_error_message
-	mov	ax,[directory_buffer + 14 + bx]
+	mov	ax,[directory_buffer + dirent_size_low + bx]
 	cmp	ax,0x7000
 	ja	print_error_message
-	mov	ax,[directory_buffer + 12 + bx]
+	mov	ax,[directory_buffer + dirent_first_sect + bx]
 	mov	[current_sector],ax
 
 	mov	bx,system_destination / 16
@@ -140,7 +138,7 @@ print_error_message:
 	int	0x10
 	jmp	print_error_message
 	.common_message:
-	mov	si,error_common
+	mov	si,msg_com_error
 	jmp	print_error_message
 
 ; ax = sector, bx = destination / 16
@@ -151,7 +149,7 @@ read_sector:
 	push	bx
 	push	ax
 	mov	es,bx
-	mov	si,error_disk_read
+	mov	si,msg_disk_read
 	dec	cx
 	jz	print_error_message
 	div	byte [sectors_per_track]
@@ -172,12 +170,12 @@ read_sector:
 	jc	.retry
 	ret
 
-error_disk_read:   db 'Disk read error.',1
-error_file_system: db 'Unknown or corrupt file system.',1
-error_not_found:   db 'Missing k16.sys.',1
-error_too_large:   db 'System too large.',1
-error_common:      db 10,13,'Remove the disk and press Ctrl+Alt+Delete.',0
-system_name:       db 'k16     sys'
+msg_disk_read:   db 'Disk read error.',1
+msg_file_system: db 'Unknown or corrupt file system.',1
+msg_not_found:   db 'Missing k16.sys.',1
+msg_too_large:   db 'System too large.',1
+msg_com_error:   db 10,13,'Remove the disk and press Ctrl+Alt+Delete.',0
+system_name:     db 'k16.sys',0,0,0,0,0,0,0,0,0,0,0,0,0
 
 drive_number:       db 0
 sectors_per_track:  db 9

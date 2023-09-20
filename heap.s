@@ -152,7 +152,10 @@ heap_walk:
 	push	dx
 	push	si
 	push	di
+	push	ds
 	push	es
+	xor	bx,bx
+	mov	ds,bx
 	mov	bx,[heap_start]
 	mov	es,bx
 	xor	cx,cx
@@ -183,6 +186,7 @@ heap_walk:
 	mov	si,.newline_string
 	call	print_cstring
 	pop	es
+	pop	ds
 	pop	di
 	pop	si
 	pop	dx

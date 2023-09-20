@@ -7,9 +7,9 @@ void GetOptions() {
 void Start() {
 	assert PathCreateDirectory("bin");
 
-	str fileList = "bin/system  'k16     sys' "
-		     + "bin/test    'test    exe' "
-		     + "bin/desktop 'desktop exe' ";
+	str fileList = "bin/system  'k16.sys' "
+		     + "bin/test    'test.exe' "
+		     + "bin/desktop 'desktop.exe' ";
 
 //	for int i = 10; i < 40; i += 1 {
 //		assert FileWriteAll("bin/%i%.txt", "the number is %i%");

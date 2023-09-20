@@ -98,7 +98,7 @@ class_button:
 	.no_push_change:
 	jmp	wndmgr_process_input_event.after_mouse_drag
 
-	.on_draw: ; input: ds = 0, es:si = item, di = .itemrect, ds = 0; preserves: ds, es, si, bp
+	.on_draw: ; input: cx = window, ds = 0, es:si = item, di = .itemrect, ds = 0; preserves: ds, es, si, bp
 	mov	bx,sys_draw_frame
 	mov	cx,frame_3d_out
 	test	word [es:si + wnd_item_flags],wnd_item_flag_pushed
@@ -139,8 +139,14 @@ class_button:
 
 class_wndtitle:
 	.on_draw:
-	mov	bx,sys_draw_block
+	mov	ax,[window_list]
+	call	dll_last
+	cmp	cx,ax
 	mov	cl,1
+	je	.active
+	mov	cl,8
+	.active:
+	mov	bx,sys_draw_block
 	int	0x20
 	mov	ax,0xF01
 	jmp	wndmgr_repaint.draw_text_centered
@@ -876,6 +882,15 @@ do_wnd_create:
 	push	bx
 	mov	di,wnd_sz
 	rep	movsb
+	mov	cx,[es:wnd_sz + wnd_desc_extra]
+	push	ax
+	xor	al,al
+	shl	cx,1
+	shl	cx,1
+	shl	cx,1
+	shl	cx,1
+	rep	stosb
+	pop	ax
 	mov	bx,word [es:wnd_l]
 	add	bx,[es:wnd_sz + wnd_desc_iwidth]
 	mov	word [es:wnd_r],bx
@@ -947,6 +962,75 @@ do_wnd_redraw:
 	pop	cx
 	iret
 
+do_alert_error:
+	push	ds
+	cmp	ax,error_corrupt
+	je	.case_corrupt
+	cmp	ax,error_disk_io
+	je	.case_disk_io
+	cmp	ax,error_no_memory
+	je	.case_no_memory
+	cmp	ax,error_not_found
+	je	.case_not_found
+	mov	ax,.alert_other
+	.create:
+	xor	bx,bx
+	mov	ds,bx
+	mov	bx,sys_wnd_create
+	int	0x20
+	pop	ds
+	iret
+	.case_corrupt:
+	mov	ax,.alert_corrupt
+	jmp	.create
+	.case_disk_io:
+	mov	ax,.alert_disk_io
+	jmp	.create
+	.case_no_memory:
+	mov	ax,.alert_no_memory
+	jmp	.create
+	.case_not_found:
+	mov	ax,.alert_not_found
+	jmp	.create
+
+	.alert_no_memory:
+	wnd_start 'System Error', .callback, 0, 200, 100
+	add_static 10, 180, 6, 21, 0, 0, 'Not enough memory is available.'
+	add_static 10, 100, 21, 36, 0, 0, 'Close some apps and retry.'
+	add_button 10, 90, 41, 64, 1, 0, 'OK'
+	wnd_end
+	.alert_not_found:
+	wnd_start 'System Error', .callback, 0, 200, 100
+	add_static 10, 180, 6, 21, 0, 0, 'The item was not found.'
+	add_button 10, 90, 41, 64, 1, 0, 'OK'
+	wnd_end
+	.alert_disk_io:
+	wnd_start 'System Error', .callback, 0, 200, 100
+	add_static 10, 180, 6, 21, 0, 0, 'The requested data is inaccessible.'
+	add_static 10, 100, 21, 36, 0, 0, 'The disk may be damaged.'
+	add_button 10, 90, 41, 64, 1, 0, 'OK'
+	wnd_end
+	.alert_corrupt:
+	wnd_start 'System Error', .callback, 0, 200, 100
+	add_static 10, 180, 6, 21, 0, 0, 'The data has been corrupted.'
+	add_static 10, 100, 21, 36, 0, 0, 'The disk may be damaged.'
+	add_button 10, 90, 41, 64, 1, 0, 'OK'
+	wnd_end
+	.alert_other:
+	wnd_start 'System Error', .callback, 0, 200, 100
+	add_static 10, 180, 6, 21, 0, 0, 'The operation failed.'
+	add_button 10, 90, 41, 64, 1, 0, 'OK'
+	wnd_end
+	.callback: 
+	cmp	dx,1
+	jne	.done
+	cmp	cx,msg_btn_clicked
+	jne	.done
+	mov	bx,sys_wnd_destroy
+	int	0x20
+	.done:
+	iret
+
 do_wndmgr_syscall:
 	or	bl,bl
 	jz	do_wnd_create
@@ -956,6 +1040,8 @@ do_wndmgr_syscall:
 	jz	do_wnd_redraw
 	dec	bl
 	jz	do_wnd_get_extra
+	dec	bl
+	jz	do_alert_error
 	jmp	exception_handler
 
 window_list: dw 0

@@ -53,12 +53,19 @@ start:
 	int	0x20
 	or	ax,ax
 	jz	wndmgr_event_loop
+	cmp	ax,error_no_memory
+	je	.no_memory
 	mov	ax,.desktop_load_error
 	mov	bx,sys_wnd_create
 	int	0x20
 	jmp	wndmgr_event_loop
+	.no_memory:
+	mov	ax,error_no_memory
+	mov	bx,sys_alert_error
+	int	0x20
+	jmp	wndmgr_event_loop
 
-	.desktop_path: db 'desktop.exe',0
+	.desktop_path: db 's:desktop.exe',0
 	.desktop_load_error:
 		wnd_start 'System Error', .desktop_load_error_callback, 0, 200, 100
 		add_static 10, 180, 10, 35, 0, 0, 'Missing system file "desktop.exe".'
@@ -135,6 +142,7 @@ do_app_start:
 	push	dx
 	push	di
 	push	bp
+	push	ds
 	push	es
 	pushf
 	xor	ax,ax
@@ -150,10 +158,12 @@ do_app_start:
 
 	.after:
 	pop	es
+	pop	ds
 	pop	bp
 	pop	di
 	pop	dx
 	pop	cx
+	xor	ax,ax
 	iret
 
 exception_handler:

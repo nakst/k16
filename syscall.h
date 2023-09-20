@@ -1,4 +1,3 @@
-; TODO Test sys_heap_alloc works with a different DS value than the system's.
 ; TODO Color management; color settings.
 
 ; to make a system call, put the number in bx, cld, and then int 0x20
@@ -7,10 +6,11 @@ sys_display_word   equ 0x0000 ; input: ax = value to print
 sys_app_start      equ 0x0001 ; input: si = cstr path; output: ax = error code, si = result from app (trashed if error)
 sys_heap_alloc     equ 0x0100 ; input: ax = memory units to alloc (multiples of 16 bytes); output: ax = offset in memory units or 0 on error
 sys_heap_free      equ 0x0101 ; input: ax = offset in memory units
-sys_file_open      equ 0x0200 ; input: al = access mode, si = cstr path; output: ax = error code, dx = handle (trashed if error)
+sys_file_open_at   equ 0x0200 ; input: al = access mode, si = cstr name, dx = parent directory; output: ax = error code, dx = handle (trashed if error); this closes the parent directory handle
 sys_file_close     equ 0x0201 ; input: dx = handle
 sys_file_read      equ 0x0202 ; input: cx = byte count, dx = handle, di = output buffer; output: ax = error code; preserves: dx
-; sys_file_write   equ 0x0203 ; input: cx = byte count, dx = handle, di = input buffer; output: ax = error code
+sys_file_open      equ 0x0203 ; input: al = access mode, si = cstr path; output: ax = error code, dx = handle (trashed if error)
+sys_dir_read       equ 0x0204 ; input: cx = entry count, dx = handle, di = output buffer; output: ax = error code, cx = entries read; preserves: dx
 sys_draw_block     equ 0x0300 ; input: cl = color, di = rect; preserves: cl, di
 sys_draw_frame     equ 0x0301 ; input: cx = style, di = rect; preserves: cx, di
 sys_draw_text      equ 0x0302 ; input: ah = color, al = bold flag, cx = x pos, dx = y pos, si = cstr; preserves: ax, cx, dx, si
@@ -19,6 +19,7 @@ sys_wnd_create     equ 0x0400 ; input: ax = window description; output: ax = han
 sys_wnd_destroy    equ 0x0401 ; input: ax = window handle
 sys_wnd_redraw     equ 0x0402 ; input: ax = window handle, dx = item id
 sys_wnd_get_extra  equ 0x0403 ; input: ax = window handle; output: es = extra segment; preserves: ax
+sys_alert_error    equ 0x0404 ; input: ax = error code, output: ax = handle (0 if error)
 
 error_none      equ 0x00
 error_corrupt   equ 0x01
@@ -29,6 +30,9 @@ error_no_memory equ 0x05
 error_eof       equ 0x06
 error_exists    equ 0x07
 error_too_large equ 0x08
+error_bad_type  equ 0x09
+
+open_parent_root         equ 0xF000 ; TODO Implement.
 
 open_access_read                  equ 0x00
 ; open_access_truncate            equ 0x01
@@ -36,8 +40,9 @@ open_access_read                  equ 0x00
 ; open_access_create              equ 0x03
 ; open_access_create_or_truncate  equ 0x04
 ; open_access_create_or_append    equ 0x05
+open_access_directory             equ 0x06
 
-file_ctrl_first_sector equ 0x00 ; TODO Is this field needed?
+file_ctrl_first_sector equ 0x00
 file_ctrl_curr_sector  equ 0x02
 file_ctrl_off_in_sect  equ 0x04
 file_ctrl_dirent_sect  equ 0x06
@@ -47,6 +52,18 @@ file_ctrl_drive        equ 0x0C
 file_ctrl_mode         equ 0x0D
 file_ctrl_dirent_index equ 0x0E
 file_ctrl_sz           equ 0x10
+
+dirent_name        equ  0
+dirent_attributes  equ 20
+dirent_size_high   equ 21
+dirent_first_sect  equ 22
+dirent_size_low    equ 24
+dirent_sz          equ 32
+dirents_per_sector equ 16
+dirent_name_sz     equ 20
+
+dentry_attr_dir     equ (1 << 0)
+dentry_attr_present equ (1 << 1)
 
 rect_l  equ 0x00 ; signed words
 rect_r  equ 0x02
