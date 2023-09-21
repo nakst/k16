@@ -3,12 +3,15 @@
 ; TODO Solid black/white block drawing can be sped up 2x.
 ; TODO 1px wide/tall line block drawing can be optimized.
 ; TODO Glyph rendering: clipping.
-; TODO Cursor save/restore: clipping.
+; TODO Cursor save/restore: clipping to screen bounds.
+; TODO Cursor save/restore: don't bother if outside the clip list.
 
 %include "bin/sansfont.s"
 
 cursor_rows equ 19
 ; Cursor columns is fixed at 16 (2 bytes).
+
+max_clip_rects equ 32
 
 cursor_arrow:
 	db 10000000b,10000000b,00000000b,00000000b,00000000b,00000000b
@@ -55,12 +58,244 @@ gfx_setup:
 	mov	es,bx
 	int	0x10
 
+	.alloc_clip_seg:
+	mov	ax,(max_clip_rects * rect_sz + 15) / 16
+	mov	bx,sys_heap_alloc
+	int	0x20
+	or	ax,ax
+	jz	out_of_memory_error
+	mov	[gfx_clip_seg],ax
+
 	.return:
 	ret
 
 	.palette: db 0x00, 0x01, 0x02, 0x23, 0x04, 0x05, 0x06, 0x07, 0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F
 
-gfx_set_cursor: ; input: ds = 0, si = cursor; preserves: ds, si
+gfx_clip_subtract: ; input ds = 0, gfx_clip_rect = rect to subtract; trashes: ax, bx, di, es
+	mov	es,[gfx_clip_seg]
+
+	.check_input_valid:
+	mov	ax,[gfx_clip_rect + rect_l]
+	cmp	ax,[gfx_clip_rect + rect_r]
+	jge	.return
+	mov	ax,[gfx_clip_rect + rect_t]
+	cmp	ax,[gfx_clip_rect + rect_b]
+	jge	.return
+
+	mov	bx,[gfx_clip_count]
+	shl	bx,1
+	shl	bx,1
+	shl	bx,1
+	.loop:
+	or	bx,bx
+	jz	.return
+	sub	bx,rect_sz
+	; Subtracting B (ds:gfx_clip_rect) from A (es:bx).
+
+	.case1: ; A and B do not intersect.
+	mov	ax,[es:bx + rect_l]
+	cmp	ax,[gfx_clip_rect + rect_r]
+	jge	.loop
+	mov	ax,[es:bx + rect_r]
+	cmp	ax,[gfx_clip_rect + rect_l]
+	jle	.loop
+	mov	ax,[es:bx + rect_t]
+	cmp	ax,[gfx_clip_rect + rect_b]
+	jge	.loop
+	mov	ax,[es:bx + rect_b]
+	cmp	ax,[gfx_clip_rect + rect_t]
+	jle	.loop
+
+	.case2: ; A is fully contained within B.
+	mov	ax,[es:bx + rect_l]
+	cmp	ax,[gfx_clip_rect + rect_l]
+	jl	.case3
+	mov	ax,[es:bx + rect_r]
+	cmp	ax,[gfx_clip_rect + rect_r]
+	jg	.case3
+	mov	ax,[es:bx + rect_t]
+	cmp	ax,[gfx_clip_rect + rect_t]
+	jl	.case3
+	mov	ax,[es:bx + rect_b]
+	cmp	ax,[gfx_clip_rect + rect_b]
+	jg	.case3
+	mov	di,[gfx_clip_count] ; Delete swap.
+	dec	di
+	mov	[gfx_clip_count],di
+	shl	di,1
+	shl	di,1
+	shl	di,1
+	mov	ax,[es:di + rect_l]
+	mov	[es:bx + rect_l],ax
+	mov	ax,[es:di + rect_r]
+	mov	[es:bx + rect_r],ax
+	mov	ax,[es:di + rect_t]
+	mov	[es:bx + rect_t],ax
+	mov	ax,[es:di + rect_b]
+	mov	[es:bx + rect_b],ax
+	jmp	.loop
+
+	.case3:
+	mov	ax,[gfx_clip_rect + rect_t]
+	cmp	ax,[es:bx + rect_t]
+	jg	.case4
+	mov	ax,[gfx_clip_rect + rect_b]
+	cmp	ax,[es:bx + rect_b]
+	jge	.case4
+	mov	ax,[gfx_clip_rect + rect_r]
+	cmp	ax,[es:bx + rect_r]
+	jge	.case3a
+	call	.append
+	mov	ax,[gfx_clip_rect + rect_r]
+	mov	[es:di + rect_l],ax
+	mov	ax,[es:bx + rect_r]
+	mov	[es:di + rect_r],ax
+	mov	ax,[es:bx + rect_t]
+	mov	[es:di + rect_t],ax
+	mov	ax,[es:bx + rect_b]
+	mov	[es:di + rect_b],ax
+	.case3a:
+	mov	ax,[gfx_clip_rect + rect_l]
+	cmp	ax,[es:bx + rect_l]
+	jle	.case3b
+	call	.append
+	mov	ax,[es:bx + rect_l]
+	mov	[es:di + rect_l],ax
+	mov	ax,[gfx_clip_rect + rect_l]
+	mov	[es:di + rect_r],ax
+	mov	ax,[es:bx + rect_t]
+	mov	[es:di + rect_t],ax
+	mov	ax,[gfx_clip_rect + rect_b]
+	mov	[es:di + rect_b],ax
+	.case3b:
+	mov	ax,[gfx_clip_rect + rect_b]
+	mov	[es:bx + rect_t],ax
+	jmp	.loop
+
+	.case4:
+	mov	ax,[gfx_clip_rect + rect_b]
+	cmp	ax,[es:bx + rect_b]
+	jl	.case5
+	mov	ax,[gfx_clip_rect + rect_t]
+	cmp	ax,[es:bx + rect_t]
+	jle	.case5
+	mov	ax,[gfx_clip_rect + rect_r]
+	cmp	ax,[es:bx + rect_r]
+	jge	.case4a
+	call	.append
+	mov	ax,[gfx_clip_rect + rect_r]
+	mov	[es:di + rect_l],ax
+	mov	ax,[es:bx + rect_r]
+	mov	[es:di + rect_r],ax
+	mov	ax,[gfx_clip_rect + rect_t]
+	mov	[es:di + rect_t],ax
+	mov	ax,[es:bx + rect_b]
+	mov	[es:di + rect_b],ax
+	.case4a:
+	mov	ax,[gfx_clip_rect + rect_l]
+	cmp	ax,[es:bx + rect_l]
+	jle	.case4b
+	call	.append
+	mov	ax,[es:bx + rect_l]
+	mov	[es:di + rect_l],ax
+	mov	ax,[gfx_clip_rect + rect_l]
+	mov	[es:di + rect_r],ax
+	mov	ax,[gfx_clip_rect + rect_t]
+	mov	[es:di + rect_t],ax
+	mov	ax,[es:bx + rect_b]
+	mov	[es:di + rect_b],ax
+	.case4b:
+	mov	ax,[gfx_clip_rect + rect_t]
+	mov	[es:bx + rect_b],ax
+	jmp	.loop
+
+	.case5:
+	mov	ax,[gfx_clip_rect + rect_t]
+	cmp	ax,[es:bx + rect_t]
+	jg	.case6
+	mov	ax,[gfx_clip_rect + rect_l]
+	cmp	ax,[es:bx + rect_l]
+	jle	.case6
+	mov	ax,[gfx_clip_rect + rect_r]
+	cmp	ax,[es:bx + rect_r]
+	jge	.case5a
+	call	.append
+	mov	ax,[gfx_clip_rect + rect_r]
+	mov	[es:di + rect_l],ax
+	mov	ax,[es:bx + rect_r]
+	mov	[es:di + rect_r],ax
+	mov	ax,[es:bx + rect_t]
+	mov	[es:di + rect_t],ax
+	mov	ax,[es:bx + rect_b]
+	mov	[es:di + rect_b],ax
+	.case5a:
+	mov	ax,[gfx_clip_rect + rect_l]
+	mov	[es:bx + rect_r],ax
+	jmp	.loop
+
+	.case6:
+	mov	ax,[gfx_clip_rect + rect_t]
+	cmp	ax,[es:bx + rect_t]
+	jg	.case7
+	mov	ax,[gfx_clip_rect + rect_r]
+	mov	[es:bx + rect_l],ax
+	jmp	.loop
+
+	.case7:
+	mov	ax,[es:bx + rect_l]
+	cmp	ax,[gfx_clip_rect + rect_l]
+	jge	.case7a
+	call	.append
+	mov	ax,[es:bx + rect_l]
+	mov	[es:di + rect_l],ax
+	mov	ax,[gfx_clip_rect + rect_l]
+	mov	[es:di + rect_r],ax
+	mov	ax,[gfx_clip_rect + rect_t]
+	mov	[es:di + rect_t],ax
+	mov	ax,[gfx_clip_rect + rect_b]
+	mov	[es:di + rect_b],ax
+	.case7a:
+	mov	ax,[es:bx + rect_r]
+	cmp	ax,[gfx_clip_rect + rect_r]
+	jle	.case7b
+	call	.append
+	mov	ax,[gfx_clip_rect + rect_r]
+	mov	[es:di + rect_l],ax
+	mov	ax,[es:bx + rect_r]
+	mov	[es:di + rect_r],ax
+	mov	ax,[gfx_clip_rect + rect_t]
+	mov	[es:di + rect_t],ax
+	mov	ax,[gfx_clip_rect + rect_b]
+	mov	[es:di + rect_b],ax
+	.case7b:
+	call	.append
+	mov	ax,[es:bx + rect_l]
+	mov	[es:di + rect_l],ax
+	mov	ax,[es:bx + rect_r]
+	mov	[es:di + rect_r],ax
+	mov	ax,[gfx_clip_rect + rect_b]
+	mov	[es:di + rect_t],ax
+	mov	ax,[es:bx + rect_b]
+	mov	[es:di + rect_b],ax
+	mov	ax,[gfx_clip_rect + rect_t]
+	mov	[es:bx + rect_b],ax
+	jmp	.loop
+
+	.return:
+	ret
+
+	.append:
+	mov	di,[gfx_clip_count]
+	cmp	di,max_clip_rects - 1
+	je	.overwrite ; TODO Better fallback?
+	inc	word [gfx_clip_count]
+	.overwrite:
+	shl	di,1
+	shl	di,1
+	shl	di,1
+	ret
+
+gfx_set_cursor: ; input: ds = 0, si = cursor; trashes everything except ds
 	mov	bp,si
 	mov	ax,[gfx_cursor_seg]
 	mov	es,ax
@@ -243,7 +478,7 @@ gfx_draw_cursor: ; input: ds = 0; trashes: ax, bx, cx, dx, di
 	sub	si,cursor_rows*6
 	ret
 
-gfx_restore_beneath_cursor: ; input: ds = 0; preserves: ds, bp, si
+gfx_restore_beneath_cursor: ; input: ds = 0; trashes everything except ds, bp, si
 	push	ds
 	mov	dx,0x3CE
 	mov	al,0x08
@@ -284,16 +519,12 @@ gfx_restore_beneath_cursor: ; input: ds = 0; preserves: ds, bp, si
 	sub	bx,640/8*cursor_rows
 	ret
 
-do_draw_block:
-	push	ax
-	push	cx
-	push	dx
-	push	si
-	push	di
-	push	bp
-	push	es
+gfx_draw_block_single:
 	push	ds
+	push	di
+	push	cx
 
+	.read_rect:
 	mov	ax,[di + rect_b]
 	push	ax
 	mov	ax,[di + rect_t]
@@ -305,51 +536,38 @@ do_draw_block:
 	xor	ax,ax
 	mov	ds,ax
 
+	.set_color:
 	and	cl,0xF
-	mov	[.color],cl
+	mov	[gfx_draw_block_single.color],cl
 
 	.clamp_rectangle:
-	mov	bx,640
+	mov	bx,[gfx_clip_rect + rect_l]
 	pop	ax
-	or	ax,ax
+	cmp	ax,bx
 	jge	.cr2
-	xor	ax,ax
+	mov	ax,bx
 	.cr2:
+	mov	[.rect + rect_l],ax
+	mov	bx,[gfx_clip_rect + rect_r]
+	pop	ax
 	cmp	ax,bx
 	jle	.cr3
 	mov	ax,bx
 	.cr3:
-	mov	[.rect + rect_l],ax
+	mov	[.rect + rect_r],ax
+	mov	bx,[gfx_clip_rect + rect_t]
 	pop	ax
-	or	ax,ax
+	cmp	ax,bx
 	jge	.cr4
-	xor	ax,ax
+	mov	ax,bx
 	.cr4:
+	mov	[.rect + rect_t],ax
+	mov	bx,[gfx_clip_rect + rect_b]
+	pop	ax
 	cmp	ax,bx
 	jle	.cr5
 	mov	ax,bx
 	.cr5:
-	mov	[.rect + rect_r],ax
-	mov	bx,350
-	pop	ax
-	or	ax,ax
-	jge	.cr6
-	xor	ax,ax
-	.cr6:
-	cmp	ax,bx
-	jle	.cr7
-	mov	ax,bx
-	.cr7:
-	mov	[.rect + rect_t],ax
-	pop	ax
-	or	ax,ax
-	jge	.cr8
-	xor	ax,ax
-	.cr8:
-	cmp	ax,bx
-	jle	.cr9
-	mov	ax,bx
-	.cr9:
 	mov	[.rect + rect_b],ax
 
 	.check_rect_valid:
@@ -565,15 +783,10 @@ do_draw_block:
 	out	dx,al
 
 	.return:
-	pop	ds
-	pop	es
-	pop	bp
-	pop	di
-	pop	si
-	pop	dx
 	pop	cx
-	pop	ax
-	iret
+	pop	di
+	pop	ds
+	ret
 
 	.thin:
 	mov	ax,bp
@@ -583,6 +796,53 @@ do_draw_block:
 
 	.rect: dw 0,0,0,0
 	.color: db 0
+
+do_draw_block:
+	push	ax
+	push	dx
+	push	si
+	push	bp
+	push	es
+
+	xor	ax,ax
+	mov	es,ax
+	mov	ax,[es:gfx_clip_seg]
+	mov	bx,[es:gfx_clip_count]
+	mov	es,ax
+	shl	bx,1
+	shl	bx,1
+	shl	bx,1
+
+	.clip_loop:
+	or	bx,bx
+	jz	.return
+	sub	bx,rect_sz
+	push	ds
+	xor	ax,ax
+	mov	ds,ax
+	mov	ax,[es:bx + rect_l]
+	mov	[gfx_clip_rect + rect_l],ax
+	mov	ax,[es:bx + rect_r]
+	mov	[gfx_clip_rect + rect_r],ax
+	mov	ax,[es:bx + rect_t]
+	mov	[gfx_clip_rect + rect_t],ax
+	mov	ax,[es:bx + rect_b]
+	mov	[gfx_clip_rect + rect_b],ax
+	pop	ds
+	push	bx
+	push	es
+	call	gfx_draw_block_single
+	pop	es
+	pop	bx
+	jmp	.clip_loop
+
+	.return:
+	pop	es
+	pop	bp
+	pop	si
+	pop	dx
+	pop	ax
+	iret
 
 do_draw_frame:
 	push	ds
@@ -664,18 +924,20 @@ do_draw_frame:
 	iret
 
 	.draw_rect_from_reg: 
-	mov	[do_draw_block.rect + rect_l],ax
-	mov	[do_draw_block.rect + rect_r],bx
-	mov	[do_draw_block.rect + rect_t],si
-	mov	[do_draw_block.rect + rect_b],dx
+	mov	[.rect + rect_l],ax
+	mov	[.rect + rect_r],bx
+	mov	[.rect + rect_t],si
+	mov	[.rect + rect_b],dx
 	push	di
 	push	bx
-	mov	di,do_draw_block.rect
+	mov	di,.rect
 	mov	bx,sys_draw_block
 	int	0x20
 	pop	bx
 	pop	di
 	ret
+
+	.rect: dw 0,0,0,0
 
 gfx_draw_glyph: ; input: ds = 0, es = 0xA000, si = high bit for new value, bx = glyph header, cx = x pos, dx = y pos; preserves: bx, cx, dx, ds, es, bp
 	push	bx
@@ -1032,5 +1294,9 @@ do_gfx_syscall:
 
 gfx_width:  dw 0
 gfx_height: dw 0
+
+gfx_clip_rect: dw 0,0,0,0
+gfx_clip_seg: dw 0
+gfx_clip_count: dw 0
 
 gfx_cursor_seg: dw 0

@@ -22,8 +22,8 @@ typedef struct DirectoryEntry {
 	uint8_t sizeHigh; // Unused for directories.
 	uint16_t firstSector;
 	uint16_t sizeLow; // Unused for directories.
-	uint16_t unused0;
-	uint16_t unused1;
+	int16_t xPosition;
+	int16_t yPosition;
 	uint16_t unused2;
 } DirectoryEntry;
 
@@ -59,6 +59,8 @@ int main(int argc, char **argv) {
 		entry->firstSector = currentSector;
 		entry->sizeLow = byteCount & 0xFFFF;
 		entry->sizeHigh = (byteCount >> 16) & 0xFFFF;
+		entry->xPosition = 20 + i * 70;
+		entry->yPosition = 15;
 
 		for (uintptr_t j = 0; j < sectorCount; j++, currentSector++) {
 			sectorTable[currentSector] = j == sectorCount - 1 ? 0xFFFE : (currentSector + 1);

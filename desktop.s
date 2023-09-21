@@ -135,27 +135,64 @@ class_file_list:
 	mov	cx,[es:fm_window_lcount]
 	mov	es,ax
 	xor	si,si
-	mov	dx,[.rect + rect_t]
-	add	dx,12
+	; TODO Clipping.
 	.draw_item_loop:
 	push	cx
+	test	byte [es:si + dirent_attributes],dentry_attr_present
+	jz	.skip_item
+
+	mov	cx,[es:si + dirent_x_position]
+	add	cx,[.rect + rect_l]
+	mov	[.itemrect + rect_l],cx
+	add	cx,32
+	mov	[.itemrect + rect_r],cx
+	mov	cx,[es:si + dirent_y_position]
+	add	cx,[.rect + rect_t]
+	mov	[.itemrect + rect_t],cx
+	add	cx,32
+	mov	[.itemrect + rect_b],cx
+	mov	cx,0xFF00
+	mov	di,.itemrect
+	mov	bx,sys_draw_frame
+	int	0x20
+
 	push	ds
-	mov	cx,[.rect + rect_l]
-	add	cx,5
+	push	es
+	mov	ax,ds
+	mov	bx,es
+	mov	ds,bx
+	mov	es,ax
+	mov	di,.mstrrect
+	mov	bx,sys_measure_text
+	xor	al,al
+	int	0x20
 	mov	bx,sys_draw_text
-	mov	ax,es
-	mov	ds,ax
 	xor	ax,ax
-	int	0x20 ; TODO Zero-terminate. Check the present attribute bit.
+	mov	cx,[es:.itemrect + rect_l]
+	add	cx,[es:.itemrect + rect_r]
+	sub	cx,[es:.mstrrect + rect_r]
+	shr	cx,1
+	mov	dx,[es:.itemrect + rect_b]
+	sub	dx,[es:.mstrrect + rect_t]
+	inc	dx
+	mov	di,[dirent_name_sz]
+	mov	byte [dirent_name_sz],0
+	int	0x20
+	mov	[dirent_name_sz],di
+	pop	es
 	pop	ds
+
+	.skip_item:
 	pop	cx
 	add	si,dirent_sz
-	add	dx,12
-	loop	.draw_item_loop
+	dec	cx
+	jnz	.draw_item_loop
 	.return:
 	iret
 
 	.rect: dw 0,0,0,0
+	.itemrect: dw 0,0,0,0
+	.mstrrect: dw 0,0,0,0
 
 fm_window_callback:
 	cmp	dx,id_file_list

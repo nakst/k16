@@ -1,6 +1,8 @@
-; TODO Clipping during wndmgr_repaint_item.
-; TODO Moving, resizing and activating windows.
+; TODO Moving and resizing windows.
 ; TODO Handling when both mouse buttons are pressed at the same time.
+; TODO Clipping items to their window; a secondary clip rectangle will be needed. (Make sure this is clipped to the screen as well!)
+; TODO Optimization: In wndmgr_repaint, immediately skip over windows that don't intersect the clip.
+; TODO Optimization: Don't always draw the background in wndmgr_repaint_item.
 
 wnd_l       equ 0x00
 wnd_r       equ 0x02
@@ -226,7 +228,15 @@ wndmgr_setup:
 	add	si,input_event_sz
 	loop	.clear_queue
 
-	mov	bx,1
+	mov	word [gfx_clip_count],1
+	mov	bx,[gfx_clip_seg]
+	mov	es,bx
+	mov	bx,[gfx_height]
+	mov	word [es:rect_b],bx
+	mov	word [es:rect_t],0
+	mov	bx,[gfx_width]
+	mov	word [es:rect_r],bx
+	mov	word [es:rect_l],0
 	call	wndmgr_repaint
 
 ;	mov	bx,100
@@ -339,10 +349,13 @@ wndmgr_process_input_event: ; input: ds = 0; trashes: all except ds
 
 	.on_left_down:
 	call	.find_item_under_cursor
+	mov	ax,[hot_window]
+	or	ax,ax
+	jz	.no_event
+	call	wndmgr_activate
 	mov	bx,[hot_item]
 	or	bx,bx
 	jz	.no_event
-	mov	ax,[hot_window]
 	mov	es,ax
 	mov	cl,[es:bx + wnd_item_code]
 	cmp	cl,wnd_item_code_button
@@ -606,11 +619,12 @@ wndmgr_repaint_item_internal: ; input: es:si = item, cx = window, ds = 0; preser
 	mov	di,wndmgr_repaint.itemrect
 	ret
 
-wndmgr_repaint_item: ; input: ax = window, es:bx = item, ds = 0; preserves: bp, es, ds
+wndmgr_repaint_item: ; input: ax = window, es:bx = item, ds = 0; trashes everything except bp, es, ds
 	push	ax
 	mov	si,bx
 	push	es
 	mov	es,ax
+	mov	cx,ax
 	mov	ax,[es:wnd_l]
 	mov	[wndmgr_repaint.wndrect + rect_l],ax
 	mov	ax,[es:wnd_r]
@@ -619,6 +633,35 @@ wndmgr_repaint_item: ; input: ax = window, es:bx = item, ds = 0; preserves: bp, 
 	mov	[wndmgr_repaint.wndrect + rect_t],ax
 	mov	ax,[es:wnd_b]
 	mov	[wndmgr_repaint.wndrect + rect_b],ax
+	mov	word [gfx_clip_count],1
+	mov	es,[gfx_clip_seg]
+	mov	ax,[wndmgr_repaint.wndrect + rect_l]
+	mov	[es:rect_l],ax
+	mov	ax,[wndmgr_repaint.wndrect + rect_r]
+	mov	[es:rect_r],ax
+	mov	ax,[wndmgr_repaint.wndrect + rect_t]
+	mov	[es:rect_t],ax
+	mov	ax,[wndmgr_repaint.wndrect + rect_b]
+	mov	[es:rect_b],ax
+	mov	ax,cx
+	.subtract_loop:
+	call	dll_next
+	call	dll_is_list
+	jc	.done_subtract
+	mov	es,ax
+	mov	cx,[es:wnd_l]
+	mov	[gfx_clip_rect + rect_l],cx
+	mov	cx,[es:wnd_r]
+	mov	[gfx_clip_rect + rect_r],cx
+	mov	cx,[es:wnd_t]
+	mov	[gfx_clip_rect + rect_t],cx
+	mov	cx,[es:wnd_b]
+	mov	[gfx_clip_rect + rect_b],cx
+	push	ax
+	call	gfx_clip_subtract
+	pop	ax
+	jmp	.subtract_loop
+	.done_subtract:
 	call	gfx_restore_beneath_cursor
 	pop	es
 	call	wndmgr_repaint_item_internal.set_rect
@@ -629,7 +672,7 @@ wndmgr_repaint_item: ; input: ax = window, es:bx = item, ds = 0; preserves: bp, 
 	call	wndmgr_repaint_item_internal.dispatch
 	jmp	gfx_draw_cursor
 
-wndmgr_repaint: ; input: bx = draw background, ds = 0; preserves: everything
+wndmgr_repaint: ; input: ds = 0, [gfx_clip_seg]; preserves: everything except [gfx_clip_seg]
 	push	ax
 	push	bx
 	push	cx
@@ -638,27 +681,11 @@ wndmgr_repaint: ; input: bx = draw background, ds = 0; preserves: everything
 	push	di
 	push	es
 
-	.draw_background:
-	or	bx,bx
-	jz	.skip_draw_background
-	mov	word [.wndrect + rect_l],0
-	mov	ax,[gfx_width]
-	mov	[.wndrect + rect_r],ax
-	mov	word [.wndrect + rect_t],0
-	mov	ax,[gfx_height]
-	mov	[.wndrect + rect_b],ax
-	mov	di,.wndrect
-	mov	cl,3
-	mov	bx,sys_draw_block
-	int	0x20
-	jmp	.skip_restore_cursor
-	.skip_draw_background:
 	call	gfx_restore_beneath_cursor
-	.skip_restore_cursor:
 
 	mov	ax,[window_list]
 	.window_loop:
-	call	dll_next
+	call	dll_prev
 	call	dll_is_list
 	jc	.window_loop_end
 	mov	es,ax
@@ -730,8 +757,37 @@ wndmgr_repaint: ; input: bx = draw background, ds = 0; preserves: everything
  
 	.next_window:
 	pop	ax
+
+	push	ax
+	mov	es,ax
+	mov	ax,[es:wnd_l]
+	mov	[gfx_clip_rect + rect_l],ax
+	mov	ax,[es:wnd_r]
+	mov	[gfx_clip_rect + rect_r],ax
+	mov	ax,[es:wnd_t]
+	mov	[gfx_clip_rect + rect_t],ax
+	mov	ax,[es:wnd_b]
+	mov	[gfx_clip_rect + rect_b],ax
+	call	gfx_clip_subtract
+	pop	ax
+	cmp	word [gfx_clip_count],0
+	je	.window_loop_end
+
 	jmp	.window_loop
+
 	.window_loop_end:
+
+	.draw_background:
+	mov	word [.wndrect + rect_l],0
+	mov	ax,[gfx_width]
+	mov	[.wndrect + rect_r],ax
+	mov	word [.wndrect + rect_t],0
+	mov	ax,[gfx_height]
+	mov	[.wndrect + rect_b],ax
+	mov	di,.wndrect
+	mov	cl,3
+	mov	bx,sys_draw_block
+	int	0x20
 
 	.draw_cursor:
 	call	gfx_draw_cursor
@@ -808,18 +864,107 @@ wndmgr_grow_items: ; input: ax = window, bx = shrink flag, ds = 0; preserves: ev
 	pop	ax
 	ret
 
+wndmgr_activate: ; input: ax = window, ds = 0; trashes everything except ax, ds
+	call	dll_next
+	call	dll_is_list
+	jc	.already_activated
+
+	call	dll_prev
+	call	dll_remove
+	mov	bx,ax
+	mov	ax,[window_list]
+	call	dll_insert_end
+	mov	ax,bx
+
+	mov	word [gfx_clip_count],1
+	mov	bx,[gfx_clip_seg]
+	mov	es,ax
+	push	word [es:wnd_l]
+	push	word [es:wnd_r]
+	push	word [es:wnd_t]
+	push	word [es:wnd_b]
+	mov	es,bx
+	pop	word [es:rect_b]
+	pop	word [es:rect_t]
+	pop	word [es:rect_r]
+	pop	word [es:rect_l]
+	; TODO Optimization: we only need to repaint the titlebar and the obscured regions.
+	call	wndmgr_repaint
+
+	call	dll_prev
+	call	dll_is_list
+	jc	.done_deactivate
+	mov	es,ax
+	mov	bl,[es:wnd_sz + wnd_desc_sz + wnd_item_code]
+	cmp	bl,wnd_item_code_title
+	jne	.done_deactivate
+	mov	bx,wnd_sz + wnd_desc_sz
+	call	wndmgr_repaint_item
+	.done_deactivate:
+	call	dll_next
+
+	ret
+
+	.already_activated:
+	call	dll_prev
+	ret
+
 do_wnd_destroy:
-	push	ax
 	push	ds
+	push	es
+
 	xor	bx,bx
 	mov	ds,bx
+
+	mov	es,ax
+	mov	bx,[es:wnd_l]
+	push	bx
+	mov	bx,[es:wnd_r]
+	push	bx
+	mov	bx,[es:wnd_t]
+	push	bx
+	mov	bx,[es:wnd_b]
+	push	bx
+	mov	word [gfx_clip_count],1
+	mov	bx,[gfx_clip_seg]
+	mov	es,bx
+	pop	bx
+	mov	word [es:rect_b],bx
+	pop	bx
+	mov	word [es:rect_t],bx
+	pop	bx
+	mov	word [es:rect_r],bx
+	pop	bx
+	mov	word [es:rect_l],bx
+
 	call	dll_remove
 	mov	bx,sys_heap_free
 	int	0x20
-	mov	bx,1
+
 	call	wndmgr_repaint
+
+	push	cx
+	push	dx
+	push	si
+	push	di
+	mov	ax,[window_list]
+	call	dll_last
+	call	dll_is_list
+	jc	.done_deactivate
+	mov	es,ax
+	mov	bl,[es:wnd_sz + wnd_desc_sz + wnd_item_code]
+	cmp	bl,wnd_item_code_title
+	jne	.done_deactivate
+	mov	bx,wnd_sz + wnd_desc_sz
+	call	wndmgr_repaint_item
+	.done_deactivate:
+	pop	di
+	pop	si
+	pop	dx
+	pop	cx
+
+	pop	es
 	pop	ds
-	pop	ax
 	iret
 
 do_wnd_create:
@@ -900,7 +1045,30 @@ do_wnd_create:
 	xor	bx,bx
 	mov	ds,bx
 	call	wndmgr_grow_items
+	mov	cx,[es:wnd_l]
+	mov	dx,[es:wnd_r]
+	mov	si,[es:wnd_t]
+	mov	di,[es:wnd_b]
+	mov	word [gfx_clip_count],1
+	mov	bx,[gfx_clip_seg]
+	mov	es,bx
+	mov	[es:rect_l],cx
+	mov	[es:rect_r],dx
+	mov	[es:rect_t],si
+	mov	[es:rect_b],di
 	call	wndmgr_repaint
+	push	ax
+	call	dll_prev
+	call	dll_is_list
+	jc	.done_deactivate
+	mov	es,ax
+	mov	bl,[es:wnd_sz + wnd_desc_sz + wnd_item_code]
+	cmp	bl,wnd_item_code_title
+	jne	.done_deactivate
+	mov	bx,wnd_sz + wnd_desc_sz
+	call	wndmgr_repaint_item
+	.done_deactivate:
+	pop	ax
 	.return:
 	pop	es
 	pop	ds
@@ -940,6 +1108,7 @@ do_wnd_get_extra:
 	iret
 
 do_wnd_redraw:
+	push	ax
 	push	cx
 	push	dx
 	push	si
@@ -960,6 +1129,7 @@ do_wnd_redraw:
 	pop	si
 	pop	dx
 	pop	cx
+	pop	ax
 	iret
 
 do_alert_error:
