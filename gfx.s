@@ -2,9 +2,11 @@
 
 ; TODO Solid black/white block drawing can be sped up 2x.
 ; TODO 1px wide/tall line block drawing can be optimized.
-; TODO Glyph rendering: clipping.
+; TODO gfx_draw_frame can be really slow sometimes? Mouse interrupts..? Graphics registers..? It seems to be latency rather than fill rate.
+; TODO Glyph rendering: accurate horizontal clipping.
 ; TODO Cursor save/restore: clipping to screen bounds.
 ; TODO Cursor save/restore: don't bother if outside the clip list.
+; TODO Text glitches when: open test app, open dialog, close dialog.
 
 %include "bin/sansfont.s"
 
@@ -14,6 +16,7 @@ cursor_rows equ 19
 max_clip_rects equ 32
 
 cursor_arrow:
+         ; 1st OR    1st XOR   2nd OR    2nd XOR   padding   padding
 	db 10000000b,10000000b,00000000b,00000000b,00000000b,00000000b
 	db 11000000b,11000000b,00000000b,00000000b,00000000b,00000000b
 	db 11100000b,10100000b,00000000b,00000000b,00000000b,00000000b
@@ -65,6 +68,28 @@ gfx_setup:
 	or	ax,ax
 	jz	out_of_memory_error
 	mov	[gfx_clip_seg],ax
+
+;	.draw_test:
+;	mov	word [gfx_clip_count],1
+;	mov	ax,[gfx_clip_seg]
+;	mov	es,ax
+;	mov	word [es:rect_l],60
+;	mov	word [es:rect_r],84
+;	mov	word [es:rect_t],46
+;	mov	word [es:rect_b],200
+;	mov	cl,2
+;	mov	di,.test_rect
+;	mov	bx,sys_draw_block
+;	int	0x20
+;	mov	ax,0x0F00
+;	mov	cx,50
+;	mov	dx,50
+;	mov	si,.test_string
+;	mov	bx,sys_draw_text
+;	int	0x20
+;	jmp	$
+;	.test_string: db 'Hello, world!',0
+;	.test_rect: dw 0,200,0,200
 
 	.return:
 	ret
@@ -944,6 +969,8 @@ gfx_draw_glyph: ; input: ds = 0, es = 0xA000, si = high bit for new value, bx = 
 	push	cx
 	push	dx
 
+	mov	[.temp2],cx
+
 	.get_glyph_bits:
 	mov	al,[bx + 2]
 	cbw
@@ -952,8 +979,10 @@ gfx_draw_glyph: ; input: ds = 0, es = 0xA000, si = high bit for new value, bx = 
 	cbw
 	sub	dx,ax
 	mov	ax,dx
+	mov	di,dx
 	mov	dx,640 / 8
 	mul	dx
+	mov	dx,di ; dx = y top in pixels
 	mov	di,cx
 	shr	di,1
 	shr	di,1
@@ -965,11 +994,49 @@ gfx_draw_glyph: ; input: ds = 0, es = 0xA000, si = high bit for new value, bx = 
 	mov	bx,[bx]
 	add	bx,def_font ; bx = source bits
 
+	.horizontal_clip:
+	mov	[.temp1],dx
+	mov	dx,[.temp2]
+	cmp	dx,[gfx_clip_rect + rect_r]
+	jge	.return
+	add	dl,al
+	adc	dh,0
+	cmp	dx,[gfx_clip_rect + rect_l]
+	jl	.return
+	; TODO Horizontal clipping within a single glyph.
+	
 	.convert_width_to_bytes:
 	add	al,7
 	shr	al,1
 	shr	al,1
 	shr	al,1
+
+	.vertical_clip:
+	mov	dx,[.temp1]
+	cmp	dx,[gfx_clip_rect + rect_b]
+	jge	.return
+	add	dl,ah
+	adc	dh,0
+	cmp	dx,[gfx_clip_rect + rect_t]
+	jl	.return
+	sub	dx,[gfx_clip_rect + rect_b]
+	cmp	dx,0
+	jle	.no_clip_b
+	sub	ah,dl
+	.no_clip_b:
+	mov	dx,[gfx_clip_rect + rect_t]
+	sub	dx,[.temp1]
+	cmp	dx,0
+	jle	.no_clip_t
+	sub	ah,dl
+	mov	[.temp1],ax
+	mul	dl ; al (width) * dl
+	add	bx,ax
+	mov	ax,640 / 8
+	mul	dl
+	add	di,ax
+	mov	ax,[.temp1]
+	.no_clip_t:
 
 	.scanline_loop:
 	push	ax
@@ -1057,10 +1124,14 @@ gfx_draw_glyph: ; input: ds = 0, es = 0xA000, si = high bit for new value, bx = 
 	dec	ah
 	jnz	.scanline_loop
 
+	.return:
 	pop	dx
 	pop	cx
 	pop	bx
 	ret
+
+	.temp1: dw 0 ; there aren't enough registers!!
+	.temp2: dw 0
 
 gfx_draw_text_plane: ; bl = plane number, bh = 1 << bl, bp = low bit is bold flag
 	.set_plane:
@@ -1123,34 +1194,11 @@ gfx_draw_text_plane: ; bl = plane number, bh = 1 << bl, bp = low bit is bold fla
 	pop	cx
 	ret
 
-do_draw_text:
-	push	ax
-	push	es
-	push	di
-	push	bp
-
-	mov	bp,ax
-
+gfx_draw_text_single:
 	.set_es:
 	mov	bx,0xA000
 	mov	es,bx
 	
-	.set_graphics_mode:
-	push	dx
-	mov	dx,0x3CE
-	mov	al,0x08
-	out	dx,al
-	inc	dx
-	mov	al,0xFF
-	out	dx,al ; masking
-	dec	dx
-	mov	al,0x05
-	out	dx,al
-	inc	dx
-	xor	al,al
-	out	dx,al ; read mode
-	pop	dx
-
 	mov	ah,0x80
 	test	bp,0x800
 	jnz	.draw_plane3
@@ -1178,12 +1226,353 @@ do_draw_text:
 	xor	ah,ah
 	.draw_plane0:
 	mov	bx,0x0100
-	call	gfx_draw_text_plane
+	jmp	gfx_draw_text_plane
 
+do_draw_text:
+	push	ax
+	push	es
+	push	di
+	push	bp
+
+	mov	bp,ax
+
+	.set_graphics_mode:
+	push	dx
+	mov	dx,0x3CE
+	mov	al,0x08
+	out	dx,al
+	inc	dx
+	mov	al,0xFF
+	out	dx,al ; masking
+	dec	dx
+	mov	al,0x05
+	out	dx,al
+	inc	dx
+	xor	al,al
+	out	dx,al ; read mode
+	pop	dx
+
+	xor	ax,ax
+	mov	es,ax
+	mov	ax,[es:gfx_clip_seg]
+	mov	bx,[es:gfx_clip_count]
+	mov	es,ax
+	shl	bx,1
+	shl	bx,1
+	shl	bx,1
+
+	.clip_loop:
+	or	bx,bx
+	jz	.return
+	sub	bx,rect_sz
+	push	ds
+	xor	ax,ax
+	mov	ds,ax
+	mov	ax,[es:bx + rect_l]
+	mov	[gfx_clip_rect + rect_l],ax
+	mov	ax,[es:bx + rect_r]
+	mov	[gfx_clip_rect + rect_r],ax
+	mov	ax,[es:bx + rect_t]
+	mov	[gfx_clip_rect + rect_t],ax
+	mov	ax,[es:bx + rect_b]
+	mov	[gfx_clip_rect + rect_b],ax
+	pop	ds
+	push	bx
+	push	es
+	call	gfx_draw_text_single
+	pop	es
+	pop	bx
+	jmp	.clip_loop
+
+	.return:
 	pop	bp
 	pop	di
 	pop	es
 	pop	ax
+	iret
+
+gfx_draw_icon_plane:
+	push	ax
+	push	cx
+	push	dx
+	push	si
+	push	di
+
+	.get_out_in_position:
+	push	ax
+	push	dx
+	xor	dh,dh
+	mov	dl,al
+	shr	dl,1
+	mov	ax,[di + rect_t]
+	mov	bp,ax
+	mul	dx
+	add	si,ax
+	pop	dx
+	mov	ax,dx
+	mov	dx,640 / 8
+	mul	dx
+	mov	dx,ax
+	mov	ax,[di + rect_l]
+	shl	ax,1
+	shl	ax,1
+	xor	bh,bh
+	add	bx,ax
+	pop	ax
+
+	xor	ah,ah
+	shr	al,1
+
+	.scanline_loop:
+	cmp	bp,[di + rect_b]
+	jge	.return
+	push	bp
+	push	ax
+	push	bx
+	push	cx
+
+	.pixel_loop:
+	mov	bp,bx
+	shr	bp,1
+	shr	bp,1
+	cmp	bp,[di + rect_r]
+	jge	.next_scanline
+
+	.check_transparent:
+	xor	bp,bp
+	mov	es,bp
+	mov	bp,bx
+	shr	bp,1
+	shr	bp,1
+	shr	bp,1
+	mov	al,[ds:si + bp]
+	mov	ah,al
+	test	bx,4
+	jnz	.odd
+	.even:
+	and	ah,0xF0
+	cmp	ah,0xB0
+	je	.skip_bit
+	jmp	.do_bit
+	.odd:
+	and	ah,0x0F
+	cmp	ah,0x0B
+	je	.skip_bit
+
+	; al = pixel pair
+	; bx = source x pos * 4 + plane
+	; cx = dest x pos
+	; si = source for plane with y pos
+	; dx = dest for plane with y pos
+	; preserve di
+	.do_bit:
+	push	bx
+	and	bx,7
+	mov	bl,[es:.lshift_lookup + bx]
+	test	al,bl
+	mov	ax,0xA000
+	push	ax
+	jz	.bit_off
+	.bit_on:
+	mov	bx,cx
+	and	bx,7
+	mov	ah,[es:.lshift_lookup + bx]
+	mov	bx,cx
+	shr	bx,1
+	shr	bx,1
+	shr	bx,1
+	pop	es
+	add	bx,dx
+	or	[es:bx],ah
+	jmp	.bit_done
+	.bit_off:
+	mov	bx,cx
+	and	bx,7
+	mov	ah,[es:.lshift_lookup_not + bx]
+	mov	bx,cx
+	shr	bx,1
+	shr	bx,1
+	shr	bx,1
+	pop	es
+	add	bx,dx
+	and	[es:bx],ah
+	.bit_done:
+	pop	bx
+	.skip_bit:
+
+	.next_pixel:
+	add	bx,4
+	inc	cx
+	jmp	.pixel_loop
+
+	.next_scanline:
+	add	dx,640 / 8
+	pop	cx
+	pop	bx
+	pop	ax
+	pop	bp
+	inc	bp
+	add	si,ax
+	jmp	.scanline_loop
+
+	.return:
+
+	pop	di
+	pop	si
+	pop	dx
+	pop	cx
+	pop	ax
+	ret
+
+	.lshift_lookup:     db 0x80,0x40,0x20,0x10,0x08,0x04,0x02,0x01
+	.lshift_lookup_not: db 0x7F,0xBF,0xDF,0xEF,0xF7,0xFB,0xFD,0xFE
+
+gfx_draw_icon_single:
+	push	bx
+	push	cx
+	push	dx
+
+	.apply_clip:
+	xor	bx,bx
+	mov	es,bx
+	mov	bx,[es:gfx_clip_rect + rect_l]
+	sub	bx,cx
+	cmp	bx,[di + rect_l]
+	jl	.cl
+	add	cx,bx
+	sub	cx,[di + rect_l]
+	mov	[di + rect_l],bx
+	.cl:
+	mov	bx,[es:gfx_clip_rect + rect_t]
+	sub	bx,dx
+	cmp	bx,[di + rect_t]
+	jl	.ct
+	add	dx,bx
+	sub	dx,[di + rect_t]
+	mov	[di + rect_t],bx
+	.ct:
+	mov	bx,[es:gfx_clip_rect + rect_r]
+	sub	bx,cx
+	cmp	bx,[di + rect_r]
+	jg	.cr
+	mov	[di + rect_r],bx
+	.cr:
+	mov	bx,[es:gfx_clip_rect + rect_b]
+	sub	bx,dx
+	cmp	bx,[di + rect_b]
+	jg	.cb
+	mov	[di + rect_b],bx
+	.cb:
+	mov	bx,[di + rect_l]
+	cmp	bx,[di + rect_r]
+	jge	.return
+	mov	bx,[di + rect_t]
+	cmp	bx,[di + rect_b]
+	jge	.return
+
+	.draw:
+	mov	bx,0x0803
+	call	.set_plane
+	call	gfx_draw_icon_plane
+	mov	bx,0x0402
+	call	.set_plane
+	call	gfx_draw_icon_plane
+	mov	bx,0x0201
+	call	.set_plane
+	call	gfx_draw_icon_plane
+	mov	bx,0x0100
+	call	.set_plane
+	call	gfx_draw_icon_plane
+
+	.return:
+	pop	dx
+	pop	cx
+	pop	bx
+	ret
+
+	.set_plane:
+	push	ax
+	push	dx
+	mov	dx,0x3C4
+	mov	al,0x02
+	out	dx,al
+	inc	dx
+	mov	al,bh
+	out	dx,al ; set write plane bit
+	mov	dx,0x3CE
+	mov	al,0x04
+	out	dx,al
+	inc	dx
+	mov	al,bl
+	out	dx,al ; set read plane number
+	pop	dx
+	pop	ax
+	ret
+
+do_draw_icon:
+	push	es
+	push	bp
+
+	.set_graphics_mode:
+	push	ax
+	push	dx
+	mov	dx,0x3CE
+	mov	al,0x08
+	out	dx,al
+	inc	dx
+	mov	al,0xFF
+	out	dx,al ; masking
+	dec	dx
+	mov	al,0x05
+	out	dx,al
+	inc	dx
+	xor	al,al
+	out	dx,al ; read mode
+	pop	dx
+	pop	ax
+
+	xor	bx,bx
+	mov	es,bx
+	mov	bx,[es:gfx_clip_seg]
+	push	word [es:gfx_clip_count]
+	mov	es,bx
+	pop	bx
+	shl	bx,1
+	shl	bx,1
+	shl	bx,1
+
+	.clip_loop:
+	or	bx,bx
+	jz	.return
+	sub	bx,rect_sz
+	push	ds
+	push	ax
+	xor	ax,ax
+	mov	ds,ax
+	mov	ax,[es:bx + rect_l]
+	mov	[gfx_clip_rect + rect_l],ax
+	mov	ax,[es:bx + rect_r]
+	mov	[gfx_clip_rect + rect_r],ax
+	mov	ax,[es:bx + rect_t]
+	mov	[gfx_clip_rect + rect_t],ax
+	mov	ax,[es:bx + rect_b]
+	mov	[gfx_clip_rect + rect_b],ax
+	pop	ax
+	pop	ds
+	push	word [di + rect_l]
+	push	word [di + rect_r]
+	push	word [di + rect_t]
+	push	word [di + rect_b]
+	call	gfx_draw_icon_single
+	pop	word [di + rect_b]
+	pop	word [di + rect_t]
+	pop	word [di + rect_r]
+	pop	word [di + rect_l]
+	jmp	.clip_loop
+
+	.return:
+	pop	bp
+	pop	es
 	iret
 
 do_measure_text:
@@ -1290,6 +1679,8 @@ do_gfx_syscall:
 	jz	do_draw_text
 	dec	bl
 	jz	do_measure_text
+	dec	bl
+	jz	do_draw_icon
 	jmp	exception_handler
 
 gfx_width:  dw 0

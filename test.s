@@ -27,9 +27,9 @@ window_callback:
 	iret
 
 	.drag:
-	mov	ax,0x1234
-	mov	bx,sys_display_word
-	int	0x20
+	; mov	ax,0x1234
+	; mov	bx,sys_display_word
+	; int	0x20
 	iret
 
 	.mouse:

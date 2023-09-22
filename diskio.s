@@ -337,7 +337,6 @@ do_file_read:
 	xor	ax,ax
 	mov	ds,ax
 	sub	cx,bx
-	mov	di,si
 	jmp	.main_loop
 
 	.next_sector:

@@ -15,11 +15,14 @@ sys_draw_block     equ 0x0300 ; input: cl = color, di = rect; preserves: cl, di
 sys_draw_frame     equ 0x0301 ; input: cx = style, di = rect; preserves: cx, di
 sys_draw_text      equ 0x0302 ; input: ah = color, al = bold flag, cx = x pos, dx = y pos, si = cstr; preserves: ax, cx, dx, si
 sys_measure_text   equ 0x0303 ; input: al = bold flag, [ds:]si = cstr, [es:]di = out rect; preserves: al, si, di
+sys_draw_icon      equ 0x0304 ; input: al = stride in pixels (multiple of 2), cx = x pos, dx = y pos, si = source, di = source rect; preserves: al, cx, dx, si, di; this uses magenta for the transparent mask
 sys_wnd_create     equ 0x0400 ; input: ax = window description; output: ax = handle (0 if error)
 sys_wnd_destroy    equ 0x0401 ; input: ax = window handle
 sys_wnd_redraw     equ 0x0402 ; input: ax = window handle, dx = item id; preserves: ax, dx
 sys_wnd_get_extra  equ 0x0403 ; input: ax = window handle; output: es = extra segment; preserves: ax
 sys_alert_error    equ 0x0404 ; input: ax = error code, output: ax = handle (0 if error)
+sys_wnd_get_rect   equ 0x0405 ; input: ax = window handle, dx = item id, di = rect destination; preserves: ax, dx, di
+sys_cursor_get     equ 0x0406 ; output: cx = cursor x, dx = cursor y
 
 error_none      equ 0x00
 error_corrupt   equ 0x01

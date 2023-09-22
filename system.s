@@ -65,7 +65,7 @@ start:
 	int	0x20
 	jmp	wndmgr_event_loop
 
-	.desktop_path: db 's:desktop.exe',0
+	.desktop_path: db 's:desktop.sys',0
 	.desktop_load_error:
 		wnd_start 'System Error', .desktop_load_error_callback, 0, 200, 100
 		add_static 10, 180, 10, 35, 0, 0, 'Missing system file "desktop.exe".'

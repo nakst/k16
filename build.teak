@@ -1,3 +1,5 @@
+#import "core:modules/imaging" im;
+
 bool use86Box #option;
 
 void GetOptions() {
@@ -7,14 +9,49 @@ void GetOptions() {
 void Start() {
 	assert PathCreateDirectory("bin");
 
+	im.Bitmap icons = im.Load(FileReadAll("icons.png"):assert()):assert();
+	str iconsOut = "icons:\n";
+
+	for int y = 0; y < im.Height(icons); y += 1 {
+		iconsOut += "\tdb ";
+
+		for int x = 0; x < im.Width(icons); x += 2 {
+			int value = 0;
+
+			for int bit = 0; bit < 2; bit += 1 {
+				int pixel = im.ReadPixel(icons, x + (1 - bit), y);
+				int id = 0;
+				     if 0xFF000080 == pixel { id =  1; }
+				else if 0xFF008000 == pixel { id =  2; }
+				else if 0xFF008080 == pixel { id =  3; }
+				else if 0xFF800000 == pixel { id =  4; }
+				else if 0xFF800080 == pixel { id =  5; }
+				else if 0xFF808000 == pixel { id =  6; }
+				else if 0xFFC0C0C0 == pixel { id =  7; }
+				else if 0xFF808080 == pixel { id =  8; }
+				else if 0xFF0000FF == pixel { id =  9; }
+				else if 0xFF00FF00 == pixel { id = 10; }
+				else if 0xFF00FFFF == pixel { id = 11; }
+				else if 0xFFFF0000 == pixel { id = 12; }
+				else if 0xFFFF00FF == pixel { id = 13; }
+				else if 0xFFFFFF00 == pixel { id = 14; }
+				else if 0xFFFFFFFF == pixel { id = 15; }
+				id = ((id & 0x8) >> 3) | ((id & 0x01) << 3)
+					| ((id & 0x04) >> 1) | ((id & 0x02) << 1);
+				value = value | (id << (bit * 4));
+			}
+
+			iconsOut += "%value%,";
+		}
+
+		iconsOut += "\n";
+	}
+
+	assert FileWriteAll("bin/icons.s", iconsOut);
+
 	str fileList = "bin/system  'k16.sys' "
 		     + "bin/test    'test.exe' "
-		     + "bin/desktop 'desktop.exe' ";
-
-//	for int i = 10; i < 40; i += 1 {
-//		assert FileWriteAll("bin/%i%.txt", "the number is %i%");
-//		fileList += "bin/%i%.txt '%i%      txt' ";
-//	}
+		     + "bin/desktop 'desktop.sys' ";
 
 	assert SystemShellExecute("cc -obin/mkfs mkfs.c");
 	assert SystemShellExecute("cc -obin/fontconv fontconv.c");

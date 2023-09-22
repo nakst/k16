@@ -13,17 +13,53 @@ fm_window_sz      equ 0x04
 max_lcount equ 128 ; no more than 128 items in a folder
 
 start:
-	mov	si,.test_exe
-	mov	bx,sys_app_start
-	int	0x20
-
 	mov	si,.test_directory
 	call	open_fm_window
 
 	iret
 
-	.test_exe: db 's:test.exe',0
 	.test_directory: db 's',0
+	.test_path_buffer: db 's:                    ',0
+
+lookup_icon: ; input: es:si = directory entry; output: ax = icon; trashes: everything except ds, es, si
+	mov	bx,si
+	add	bx,dirent_name_sz
+	xor	cx,cx
+	.look_for_dot_loop:
+	mov	al,[es:bx - 1]
+	cmp	al,'.'
+	je	.found_dot
+	dec	bx
+	or	al,al
+	jz	.look_for_dot_loop
+	inc	cx
+	cmp	bx,si
+	jne	.look_for_dot_loop
+	.found_dot:
+	mov	ax,icons + 0x200 * 0
+	cmp	cx,3
+	jne	.return
+
+%macro check_extension 4
+	cmp	byte [es:bx + 0],%2
+	jne	.not_%1
+	cmp	byte [es:bx + 1],%3
+	jne	.not_%1
+	cmp	byte [es:bx + 2],%4
+	jne	.not_%1
+	mov	ax,icons + 0x200 * %1
+	jmp	.return
+	.not_%1:
+%endmacro
+
+icon_system_file equ 1
+icon_executable  equ 2
+
+	check_extension icon_system_file,'s','y','s'
+	check_extension icon_executable, 'e','x','e'
+	
+	.return:
+	ret
 
 open_fm_window: ; si = directory
 	mov	ax,(32 * max_lcount) / 16 ; TODO Resizing.
@@ -106,6 +142,76 @@ class_file_list:
 	.dispatch:
 	cmp	cx,msg_custom_draw
 	je	.on_draw
+	cmp	cx,msg_custom_mouse
+	je	.on_mouse
+	iret
+
+	.on_mouse:
+	cmp	si,1
+	jne	.return
+	mov	di,.rect
+	mov	bx,sys_wnd_get_rect
+	int	0x20
+	mov	bx,sys_wnd_get_extra
+	int	0x20
+	mov	ax,[es:fm_window_listing]
+	or	ax,ax
+	jz	.return
+	mov	cx,[es:fm_window_lcount]
+	mov	es,ax
+	xor	si,si
+	.mouse_item_loop:
+	push	cx
+	test	byte [es:si + dirent_attributes],dentry_attr_present
+	jz	.no_hit
+	mov	bx,[es:si + dirent_x_position]
+	add	bx,[.rect + rect_l]
+	mov	[.itemrect + rect_l],bx
+	add	bx,0x20
+	mov	[.itemrect + rect_r],bx
+	mov	bx,[es:si + dirent_y_position]
+	add	bx,[.rect + rect_t]
+	mov	[.itemrect + rect_t],bx
+	add	bx,0x20
+	mov	[.itemrect + rect_b],bx
+	mov	bx,sys_cursor_get
+	int	0x20
+	cmp	cx,[.itemrect + rect_l]
+	jl	.no_hit
+	cmp	cx,[.itemrect + rect_r]
+	jge	.no_hit
+	cmp	dx,[.itemrect + rect_t]
+	jl	.no_hit
+	cmp	dx,[.itemrect + rect_b]
+	jl	.hit
+	.no_hit:
+	pop	cx
+	add	si,dirent_sz
+	dec	cx
+	jnz	.mouse_item_loop
+	iret
+	.hit:
+	pop	cx
+	call	lookup_icon
+	cmp	ax,icons + 0x200 * icon_executable
+	je	.hit_executable
+	iret
+	.hit_executable:
+	mov	cx,dirent_name_sz
+	mov	di,start.test_path_buffer + 2
+	.copy_name:
+	mov	al,[es:si]
+	mov	[di],al
+	inc	si
+	inc	di
+	loop	.copy_name
+	mov	si,start.test_path_buffer
+	mov	bx,sys_app_start
+	int	0x20
+	or	ax,ax
+	jz	.return
+	mov	bx,sys_alert_error
+	int	0x20
 	iret
 
 	.on_draw:
@@ -144,17 +250,24 @@ class_file_list:
 	mov	cx,[es:si + dirent_x_position]
 	add	cx,[.rect + rect_l]
 	mov	[.itemrect + rect_l],cx
-	add	cx,32
+	add	cx,0x20
 	mov	[.itemrect + rect_r],cx
 	mov	cx,[es:si + dirent_y_position]
 	add	cx,[.rect + rect_t]
 	mov	[.itemrect + rect_t],cx
-	add	cx,32
+	add	cx,0x20
 	mov	[.itemrect + rect_b],cx
-	mov	cx,0xFF00
-	mov	di,.itemrect
-	mov	bx,sys_draw_frame
+
+	call	lookup_icon
+	push	si
+	mov	si,ax
+	mov	di,iconrect
+	mov	ax,0x20
+	mov	cx,[.itemrect + rect_l]
+	mov	dx,[.itemrect + rect_t]
+	mov	bx,sys_draw_icon
 	int	0x20
+	pop	si
 
 	push	ds
 	push	es
@@ -181,12 +294,13 @@ class_file_list:
 	mov	[dirent_name_sz],di
 	pop	es
 	pop	ds
-
 	.skip_item:
 	pop	cx
 	add	si,dirent_sz
 	dec	cx
 	jnz	.draw_item_loop
+	jmp	.return
+
 	.return:
 	iret
 
@@ -203,3 +317,6 @@ fm_window_description:
 	wnd_start 'File Manager', fm_window_callback, fm_window_sz, 250, 200
 	add_custom 0, 0, 0, 0, id_file_list, wnd_item_flag_grow_r | wnd_item_flag_grow_b, 'File List'
 	wnd_end
+
+%include "bin/icons.s"
+iconrect: dw 0,0x20,0,0x20

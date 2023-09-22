@@ -239,9 +239,9 @@ wndmgr_setup:
 	mov	word [es:rect_l],0
 	call	wndmgr_repaint
 
-;	mov	bx,100
+;	mov	bx,120
 ;	mov	[cursor_x],bx
-;	mov	bx,60
+;	mov	bx,70
 ;	mov	[cursor_y],bx
 ;	mov	bx,input_event_type_left_down
 ;	call	wndmgr_push_input_event
@@ -277,6 +277,8 @@ wndmgr_event_loop:
 	.wait:
 	hlt
 	.loop:
+	call	heap_walk
+	jmp	$
 	call	wndmgr_process_input_event
 	.no_input_event:
 	mov	ax,[cursor_x]
@@ -1079,7 +1081,7 @@ do_wnd_create:
 	iret
 	.cascade: dw 20
 
-wndmgr_find_item: ; input: ax = window, dx = item; output: es:si = description of item, cf = not found
+wndmgr_find_item: ; input: ax = window, dx = item; output: es:si = description of item, cf = not found; preserves: dx
 	mov	es,ax
 	mov	si,wnd_sz + wnd_desc_sz
 	.loop:
@@ -1130,6 +1132,34 @@ do_wnd_redraw:
 	pop	dx
 	pop	cx
 	pop	ax
+	iret
+
+do_wnd_get_rect:
+	push	es
+	push	si
+	push	ax
+	push	cx
+	mov	es,ax
+	mov	cx,[es:wnd_l]
+	mov	bx,[es:wnd_t]
+	call	wndmgr_find_item
+	jc	exception_handler
+	mov	ax,[es:si + wnd_item_l]
+	add	ax,cx
+	mov	[di + rect_l],ax
+	mov	ax,[es:si + wnd_item_r]
+	add	ax,cx
+	mov	[di + rect_r],ax
+	mov	ax,[es:si + wnd_item_t]
+	add	ax,bx
+	mov	[di + rect_t],ax
+	mov	ax,[es:si + wnd_item_b]
+	add	ax,bx
+	mov	[di + rect_b],ax
+	pop	cx
+	pop	ax
+	pop	si
+	pop	es
 	iret
 
 do_alert_error:
@@ -1201,6 +1231,15 @@ do_alert_error:
 	.done:
 	iret
 
+do_cursor_get:
+	push	ds
+	xor	bx,bx
+	mov	ds,bx
+	mov	cx,[cursor_x_sync]
+	mov	dx,[cursor_y_sync]
+	pop	ds
+	iret
+
 do_wndmgr_syscall:
 	or	bl,bl
 	jz	do_wnd_create
@@ -1212,6 +1251,10 @@ do_wndmgr_syscall:
 	jz	do_wnd_get_extra
 	dec	bl
 	jz	do_alert_error
+	dec	bl
+	jz	do_wnd_get_rect
+	dec	bl
+	jz	do_cursor_get
 	jmp	exception_handler
 
 window_list: dw 0
