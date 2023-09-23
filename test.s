@@ -13,6 +13,8 @@ start:
 	mov	ax,window_description
 	mov	bx,sys_wnd_create
 	int	0x20
+	mov	bx,sys_wnd_show
+	int	0x20
 	iret
 
 window_callback:
@@ -71,6 +73,13 @@ window_callback:
 	je	.push
 	cmp	dx,id_ok
 	je	.ok
+	cmp	dx,id_two_of_them
+	je	.two_of_them
+	iret
+
+	.two_of_them:
+	mov	bx,sys_wnd_destroy
+	int	0x20
 	iret
 
 	.ok:
@@ -88,6 +97,8 @@ window_callback:
 	mov	bx,sys_wnd_get_extra
 	int	0x20
 	mov	[es:0],ax
+	mov	bx,sys_wnd_show
+	int	0x20
 	iret
 
 	.return:

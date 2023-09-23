@@ -4,6 +4,11 @@
 
 %include "syscall.h"
 
+module_code equ 0x00
+module_path equ 0x02
+module_refs equ 0x04
+module_sz   equ 0x10 ; must be a multiple of 16
+
 ; dl = drive number, bx = end of system / 16, cs = ds = ss = 0, sp = 0x7C00, direction flag clear, interrupts enabled
 start:
 	.save_boot_information:
@@ -48,19 +53,24 @@ start:
 	call	gfx_setup
 	call	wndmgr_setup
 
+	call	dll_alloc
+	jc	out_of_memory_error
+	mov	[module_list],ax
+
 	mov	si,.desktop_path
 	mov	bx,sys_app_start
 	int	0x20
 	or	ax,ax
 	jz	wndmgr_event_loop
-	cmp	ax,error_no_memory
-	je	.no_memory
+	cmp	ax,error_not_found
+	jne	.general_error
 	mov	ax,.desktop_load_error
 	mov	bx,sys_wnd_create
 	int	0x20
+	mov	bx,sys_wnd_show
+	int	0x20
 	jmp	wndmgr_event_loop
-	.no_memory:
-	mov	ax,error_no_memory
+	.general_error:
 	mov	bx,sys_alert_error
 	int	0x20
 	jmp	wndmgr_event_loop
@@ -79,11 +89,63 @@ start:
 %include "mouse.s"
 %include "wndmgr.s"
 
+module_free: ; input: ax = module
+	push	bx
+	call	dll_remove
+	mov	bx,sys_heap_free
+	int	0x20
+	pop	bx
+	ret
+
 do_app_start:
+	push	es
+	push	si
+	push	di
+	xor	ax,ax
+	mov	es,ax
+	mov	ax,[es:module_list]
+	push	si
+	push	ax
+	.module_search:
+	pop	ax
+	pop	si
+	call	dll_next
+	call	dll_is_list
+	jc	.not_found
+	push	si
+	push	ax
+	mov	es,ax
+	mov	bx,[es:module_path]
+	mov	es,bx
+	xor	di,di
+	.compare_paths:
+	cmpsb
+	jne	.module_search
+	dec	si
+	lodsb
+	or	al,al
+	jnz	.compare_paths
+	pop	ax
+	pop	si
+	mov	es,ax
+	inc	word [es:module_refs]
+	pop	di
+	pop	si
+	pop	es
+	mov	si,ax
+	jmp	.call_start
+	.not_found:
+	pop	di
+	pop	si
+	pop	es
+
+	.open_file:
 	push	dx
 	mov	al,open_access_read
 	mov	bx,sys_file_open
+	push	si
 	int	0x20
+	pop	si
 	or	ax,ax
 	jz	.opened
 	pop	dx
@@ -94,19 +156,48 @@ do_app_start:
 	mov	es,dx
 	mov	ax,[es:file_ctrl_size_high]
 	or	ax,ax
-	jz	.not_too_large
-	mov	ax,error_too_large
-	pop	es
-	pop	dx
-	iret
-
-	.not_too_large:
+	jnz	.too_large
 	mov	ax,[es:file_ctrl_size_low]
+	cmp	ax,0xFC00 ; ensure there's some space for module metadata
+	jae	.too_large
 	add	ax,15
 	shr	ax,1
 	shr	ax,1
 	shr	ax,1
 	shr	ax,1
+	add	ax,module_sz / 16
+
+	push	si
+	push	cx
+	push	ax
+	xor	cx,cx
+	.count_path_bytes:
+	inc	cx
+	cmp	cx,0x100
+	je	.name_too_long
+	lodsb
+	or	al,al
+	jnz	.count_path_bytes
+	add	cx,15
+	shr	cx,1
+	shr	cx,1
+	shr	cx,1
+	shr	cx,1
+	pop	ax
+	add	ax,cx
+	pop	cx
+	pop	si
+	jmp	.allocate
+	.name_too_long:
+	pop	ax
+	pop	cx
+	pop	si
+	pop	es
+	pop	dx
+	mov	ax,error_bad_name
+	iret
+
+	.allocate:
 	mov	bx,sys_heap_alloc
 	int	0x20
 	or	ax,ax
@@ -116,13 +207,44 @@ do_app_start:
 	pop	dx
 	iret
 
+	.too_large:
+	mov	ax,error_too_large
+	pop	es
+	pop	dx
+	iret
+
 	.allocated:
+	push	es
+	push	ax
+	mov	cx,[es:file_ctrl_size_low]
+	mov	es,ax
+	add	ax,module_sz / 16
+	mov	[es:module_code],ax
+	add	cx,15
+	shr	cx,1
+	shr	cx,1
+	shr	cx,1
+	shr	cx,1
+	add	ax,cx
+	mov	[es:module_path],ax
+	mov	word [es:module_refs],1
+	mov	es,ax
+	push	di
+	xor	di,di
+	.copy_path_loop:
+	lodsb
+	stosb
+	or	al,al
+	jnz	.copy_path_loop
+	pop	di
+	pop	ax
+	pop	es
 	mov	si,ax ; si = segment
 	push	cx
 	push	di
 	push	ds
-	xor	di,di
 	mov	ds,ax
+	mov	di,module_sz
 	mov	cx,[es:file_ctrl_size_low]
 	mov	bx,sys_file_read
 	int	0x20
@@ -135,9 +257,23 @@ do_app_start:
 	pop	dx
 	or	ax,ax
 	jz	.read_done
+	push	ax
+	mov	ax,si
+	mov	bx,sys_heap_free
+	int	0x20
+	pop	ax
 	iret
 
 	.read_done:
+	push	ds
+	xor	ax,ax
+	mov	ds,ax
+	mov	bx,si
+	mov	ax,[module_list]
+	call	dll_insert_end
+	pop	ds
+
+	.call_start:
 	push	cx
 	push	dx
 	push	di
@@ -150,6 +286,7 @@ do_app_start:
 	mov	ax,.after
 	push	ax
 	pushf
+	add	si,module_sz / 16
 	mov	ds,si
 	push	si
 	xor	ax,ax
@@ -157,6 +294,13 @@ do_app_start:
 	iret
 
 	.after:
+	mov	ax,ds
+	sub	ax,module_sz / 16
+	mov	es,ax
+	dec	word [es:module_refs]
+	jnz	.return
+	call	module_free
+	.return:
 	pop	es
 	pop	ds
 	pop	bp
@@ -219,3 +363,5 @@ int_0x20:
 	dec	bh
 	jz	do_wndmgr_syscall
 	jmp	exception_handler
+
+module_list: dw 0

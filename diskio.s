@@ -69,6 +69,7 @@ do_file_open:
 do_file_open_at:
 	; TODO Other disks (open_parent_root).
 	; TODO Check the file isn't already open for exclusive access.
+	; TODO Prevent modifying/moving/deleting a file loaded as an executable
 
 	push	es
 	push	di

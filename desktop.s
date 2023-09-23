@@ -103,9 +103,7 @@ open_fm_window: ; si = directory
 	mov	[es:fm_window_listing],bx
 	mov	bx,[.lcount]
 	mov	[es:fm_window_lcount],bx
-
-	mov	bx,sys_wnd_redraw
-	mov	dx,id_file_list
+	mov	bx,sys_wnd_show
 	int	0x20
 
 	ret

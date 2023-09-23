@@ -16,6 +16,7 @@ sys_draw_frame     equ 0x0301 ; input: cx = style, di = rect; preserves: cx, di
 sys_draw_text      equ 0x0302 ; input: ah = color, al = bold flag, cx = x pos, dx = y pos, si = cstr; preserves: ax, cx, dx, si
 sys_measure_text   equ 0x0303 ; input: al = bold flag, [ds:]si = cstr, [es:]di = out rect; preserves: al, si, di
 sys_draw_icon      equ 0x0304 ; input: al = stride in pixels (multiple of 2), cx = x pos, dx = y pos, si = source, di = source rect; preserves: al, cx, dx, si, di; this uses magenta for the transparent mask
+sys_draw_invert    equ 0x0305 ; input: di = rect; preserves: di
 sys_wnd_create     equ 0x0400 ; input: ax = window description; output: ax = handle (0 if error)
 sys_wnd_destroy    equ 0x0401 ; input: ax = window handle
 sys_wnd_redraw     equ 0x0402 ; input: ax = window handle, dx = item id; preserves: ax, dx
@@ -23,6 +24,7 @@ sys_wnd_get_extra  equ 0x0403 ; input: ax = window handle; output: es = extra se
 sys_alert_error    equ 0x0404 ; input: ax = error code, output: ax = handle (0 if error)
 sys_wnd_get_rect   equ 0x0405 ; input: ax = window handle, dx = item id, di = rect destination; preserves: ax, dx, di
 sys_cursor_get     equ 0x0406 ; output: cx = cursor x, dx = cursor y
+sys_wnd_show       equ 0x0407 ; input: ax = window handle; preserves: ax
 
 error_none      equ 0x00
 error_corrupt   equ 0x01
@@ -114,6 +116,8 @@ msg_custom_mouse equ 0x0003 ; ax = window, dx = id, si = [bit 0 = down, bit 1 = 
 msg_custom_drag  equ 0x0004 ; ax = window, dx = id
 ; TODO msg_resize, msg_move, msg_close
 
+_wnd_item_id_title equ -1
+
 %macro add_wnditem 8 ; type, left, right, top, bottom, id, flags, string
 	db	%1
 	db	%strlen(%8)+1
@@ -143,7 +147,7 @@ msg_custom_drag  equ 0x0004 ; ax = window, dx = id
 	dw	(%3 + 15) / 16
 	dw	%4
 	dw	%5
-	add_wnditem wnd_item_code_title, 0, 0, -20, -2, 0, wnd_item_flag_grow_r, %1
+	add_wnditem wnd_item_code_title, 0, 0, -20, -1, _wnd_item_id_title, wnd_item_flag_grow_r, %1
 %endmacro
 
 %macro wnd_end 0
