@@ -17,7 +17,7 @@ sys_draw_text      equ 0x0302 ; input: ah = color, al = bold flag, cx = x pos, d
 sys_measure_text   equ 0x0303 ; input: al = bold flag, [ds:]si = cstr, [es:]di = out rect; preserves: al, si, di
 sys_draw_icon      equ 0x0304 ; input: al = stride in pixels (multiple of 2), cx = x pos, dx = y pos, si = source, di = source rect; preserves: al, cx, dx, si, di; this uses magenta for the transparent mask
 sys_draw_invert    equ 0x0305 ; input: di = rect; preserves: di
-sys_wnd_create     equ 0x0400 ; input: ax = window description; output: ax = handle (0 if error)
+sys_wnd_create     equ 0x0400 ; input: ax = window description, cs = owning module; output: ax = handle (0 if error)
 sys_wnd_destroy    equ 0x0401 ; input: ax = window handle
 sys_wnd_redraw     equ 0x0402 ; input: ax = window handle, dx = item id; preserves: ax, dx
 sys_wnd_get_extra  equ 0x0403 ; input: ax = window handle; output: es = extra segment; preserves: ax
@@ -98,25 +98,42 @@ wnd_item_flag_grow_l equ (1 << 1) ; l is an offset from the right side of the wi
 wnd_item_flag_grow_r equ (1 << 2) ; r is an offset from the right side of the window
 wnd_item_flag_grow_t equ (1 << 3) ; t is an offset from the bottom side of the window
 wnd_item_flag_grow_b equ (1 << 4) ; b is an offset from the bottom side of the window
+wnd_item_flag_horz   equ (1 << 5) ; used by some item types
 
-wnd_item_code_button equ 0x01
-wnd_item_code_title  equ 0x02
-wnd_item_code_static equ 0x03
-wnd_item_code_custom equ 0x04
+wnd_flag_dialog   equ (1 << 0) ; Fills the background.
+wnd_flag_scrolled equ (1 << 1) ; Draws various internal borders.
+wnd_flag_framed   equ (1 << 2) ; Draws the main border frame.
+wnd_flag_menu     equ (1 << 3) ; Internal use.
+
+wnd_item_code_button    equ 0x01
+wnd_item_code_title     equ 0x02
+wnd_item_code_static    equ 0x03
+wnd_item_code_custom    equ 0x04
+wnd_item_code_reszpad   equ 0x05
+wnd_item_code_scrollbar equ 0x06
 
 wnd_desc_callback equ 0x00
 wnd_desc_extra    equ 0x02 ; extra memory to allocate, access with sys_wnd_get_extra
 wnd_desc_iwidth   equ 0x04
 wnd_desc_iheight  equ 0x06
-wnd_desc_sz       equ 0x08
+wnd_desc_flags    equ 0x08
+wnd_desc_menubar  equ 0x0A
+wnd_desc_sz       equ 0x0C
 
+; cx = msg code
 msg_btn_clicked  equ 0x0001 ; ax = window, dx = id
-msg_custom_draw  equ 0x0002 ; ax = window, dx = id, si = rect segment, di = rect
+msg_custom_draw  equ 0x0002 ; ax = window, dx = id, si = rect segment, di = rect (rect can be overwritten)
 msg_custom_mouse equ 0x0003 ; ax = window, dx = id, si = [bit 0 = down, bit 1 = button]
 msg_custom_drag  equ 0x0004 ; ax = window, dx = id
 ; TODO msg_resize, msg_move, msg_close
+msg_user_start   equ 0x8000
 
-_wnd_item_id_title equ -1
+_wnd_item_id_title    equ -1
+_wnd_item_id_reszpad  equ -2
+_wnd_item_id_scroll_x equ -3
+_wnd_item_id_scroll_y equ -4
+
+menu_flag_separator equ (1 << 0)
 
 %macro add_wnditem 8 ; type, left, right, top, bottom, id, flags, string
 	db	%1
@@ -142,14 +159,50 @@ _wnd_item_id_title equ -1
 	add_wnditem wnd_item_code_custom, %1, %2, %3, %4, %5, %6, %7
 %endmacro
 
-%macro wnd_start 5 ; title, callback, extra bytes, init width, init height
-	dw	%2
-	dw	(%3 + 15) / 16
+%macro add_scrollbars 0
+	add_wnditem wnd_item_code_reszpad, -16, 0, -16, 0, _wnd_item_id_reszpad, wnd_item_flag_grow_l | wnd_item_flag_grow_r | wnd_item_flag_grow_t | wnd_item_flag_grow_b, 'Resize'
+	add_wnditem wnd_item_code_scrollbar, 2, -18, -18, -1, _wnd_item_id_scroll_x, wnd_item_flag_grow_r | wnd_item_flag_grow_t | wnd_item_flag_grow_b | wnd_item_flag_horz, 'Scroll X'
+	add_wnditem wnd_item_code_scrollbar, -18, -1, 2, -18, _wnd_item_id_scroll_y, wnd_item_flag_grow_l | wnd_item_flag_grow_r | wnd_item_flag_grow_b, 'Scroll Y'
+%endmacro
+
+%macro wnd_start_no_decor 6 ; callback, extra bytes, init width, init height, flags, menubar
+	dw	%1
+	dw	(%2 + 15) / 16
+	dw	%3
 	dw	%4
 	dw	%5
+	dw	%6
+%endmacro
+
+%macro wnd_start 7 ; title, callback, extra bytes, init width, init height, flags, menubar
+	wnd_start_no_decor %2, %3, %4, %5, %6 | wnd_flag_framed, %7
 	add_wnditem wnd_item_code_title, 0, 0, -20, -1, _wnd_item_id_title, wnd_item_flag_grow_r, %1
 %endmacro
 
 %macro wnd_end 0
 	db	0x00
+%endmacro
+
+%macro add_menu 3 ; string, id, flags
+	db	%strlen(%1)+1
+	dw	%2
+	dw	%3
+	db	%1,0
+%endmacro
+
+%macro menu_start 0
+%endmacro
+
+%macro menu_end 0
+	db	0x00
+%endmacro
+
+%macro debug_log_16 1
+	push	ax
+	push	bx
+	mov	ax,%1
+	mov	bx,sys_display_word
+	int	0x20
+	pop	bx
+	pop	ax
 %endmacro

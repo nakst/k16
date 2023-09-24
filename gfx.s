@@ -1627,6 +1627,20 @@ gfx_draw_icon_single:
 	.apply_clip:
 	xor	bx,bx
 	mov	es,bx
+	mov	bx,[es:gfx_clip_rect + rect_r]
+	sub	bx,cx
+	add	bx,[ds:di + rect_l]
+	cmp	bx,[di + rect_r]
+	jg	.cr
+	mov	[di + rect_r],bx
+	.cr:
+	mov	bx,[es:gfx_clip_rect + rect_b]
+	sub	bx,dx
+	add	bx,[ds:di + rect_t]
+	cmp	bx,[di + rect_b]
+	jg	.cb
+	mov	[di + rect_b],bx
+	.cb:
 	mov	bx,[es:gfx_clip_rect + rect_l]
 	sub	bx,cx
 	cmp	bx,[di + rect_l]
@@ -1643,18 +1657,6 @@ gfx_draw_icon_single:
 	sub	dx,[di + rect_t]
 	mov	[di + rect_t],bx
 	.ct:
-	mov	bx,[es:gfx_clip_rect + rect_r]
-	sub	bx,cx
-	cmp	bx,[di + rect_r]
-	jg	.cr
-	mov	[di + rect_r],bx
-	.cr:
-	mov	bx,[es:gfx_clip_rect + rect_b]
-	sub	bx,dx
-	cmp	bx,[di + rect_b]
-	jg	.cb
-	mov	[di + rect_b],bx
-	.cb:
 	mov	bx,[di + rect_l]
 	cmp	bx,[di + rect_r]
 	jge	.return

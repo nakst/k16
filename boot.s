@@ -23,25 +23,25 @@ start:
 	jmp	0x0000:.set_cs
 	.set_cs:
 
-;	.fill_memory: ; fill all usable memory with 0xC1 to test we're not relying on emulator's zero initialization
-;	int	0x12
-;	mov	bx,0x40
-;	mul	bx
-;	mov	bx,ax
-;	.fill_memory_loop:
-;	dec	bx
-;	mov	cx,0x10
-;	mov	es,bx
-;	xor	di,di
-;	mov	al,0xC1
-;	rep	stosb
-;	cmp	bx,0x50
-;	je	.fill_memory_done
-;	cmp	bx,0x7E0
-;	jne	.fill_memory_loop
-;	sub	bx,0x20
-;	jmp	.fill_memory_loop
-;	.fill_memory_done:
+	.fill_memory: ; fill all usable memory with 0xC1 to test we're not relying on emulator's zero initialization
+	int	0x12
+	mov	bx,0x40
+	mul	bx
+	mov	bx,ax
+	.fill_memory_loop:
+	dec	bx
+	mov	cx,0x10
+	mov	es,bx
+	xor	di,di
+	mov	al,0xC1
+	rep	stosb
+	cmp	bx,0x50
+	je	.fill_memory_done
+	cmp	bx,0x7E0
+	jne	.fill_memory_loop
+	sub	bx,0x20
+	jmp	.fill_memory_loop
+	.fill_memory_done:
 
 	xor	ax,ax
 	mov	bx,sector_table / 16

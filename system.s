@@ -77,7 +77,7 @@ start:
 
 	.desktop_path: db 's:desktop.sys',0
 	.desktop_load_error:
-		wnd_start 'System Error', .desktop_load_error_callback, 0, 200, 100
+		wnd_start 'System Error', .desktop_load_error_callback, 0, 200, 100, wnd_flag_dialog, 0
 		add_static 10, 180, 10, 35, 0, 0, 'Missing system file "desktop.exe".'
 		add_static 10, 100, 35, 60, 0, 0, 'Please restart your computer.'
 		wnd_end

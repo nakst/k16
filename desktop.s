@@ -10,6 +10,11 @@ fm_window_listing equ 0x00
 fm_window_lcount  equ 0x02
 fm_window_sz      equ 0x04
 
+fm_command_new_folder equ 0x0001
+fm_command_open       equ 0x0002
+fm_command_get_info   equ 0x0003
+fm_command_delete     equ 0x0004
+
 max_lcount equ 128 ; no more than 128 items in a folder
 
 start:
@@ -227,9 +232,6 @@ class_file_list:
 	mov	cl,0x0F
 	mov	bx,sys_draw_block
 	int	0x20
-	mov	cx,frame_3d_in
-	mov	bx,sys_draw_frame
-	int	0x20
 	pop	ax
 	mov	bx,sys_wnd_get_extra
 	int	0x20
@@ -312,9 +314,27 @@ fm_window_callback:
 	iret
 
 fm_window_description:
-	wnd_start 'File Manager', fm_window_callback, fm_window_sz, 250, 200
-	add_custom 0, 0, 0, 0, id_file_list, wnd_item_flag_grow_r | wnd_item_flag_grow_b, 'File List'
+	wnd_start 'File Manager', fm_window_callback, fm_window_sz, 250, 200, wnd_flag_scrolled, fm_window_menubar
+	add_scrollbars
+	add_custom 2, -18, 2, -18, id_file_list, wnd_item_flag_grow_r | wnd_item_flag_grow_b, 'File List'
 	wnd_end
+
+fm_window_menubar:
+	menu_start
+	add_menu 'File',fm_window_menu_file,0
+	add_menu 'Edit',fm_window_menu_edit,0
+	menu_end
+fm_window_menu_file:
+	menu_start
+	add_menu 'New Folder',fm_command_new_folder,0
+	add_menu '',0,menu_flag_separator
+	add_menu 'Open',fm_command_open,0
+	add_menu 'Get Info',fm_command_get_info,0
+	menu_end
+fm_window_menu_edit:
+	menu_start
+	add_menu 'Delete',fm_command_delete,0
+	menu_end
 
 %include "bin/icons.s"
 iconrect: dw 0,0x20,0,0x20

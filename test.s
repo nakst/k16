@@ -58,12 +58,17 @@ window_callback:
 
 	.draw_custom:
 	push	ds
-	mov	cl,[custom_color]
+	mov	dl,[custom_color]
 	mov	ds,si
-	mov	bx,sys_draw_block
-	int	0x20
 	mov	bx,sys_draw_frame
 	mov	cx,frame_3d_in
+	int	0x20
+	mov	cl,dl
+	add	word [di + rect_l],2
+	sub	word [di + rect_r],2
+	add	word [di + rect_t],2
+	sub	word [di + rect_b],2
+	mov	bx,sys_draw_block
 	int	0x20
 	pop	ds
 	iret
@@ -110,14 +115,14 @@ test_file_output: times 16 db 0
 custom_color: db 0
 
 window_description:
-	wnd_start 'Test Application', window_callback, 0, 230, 200
+	wnd_start 'Test Application', window_callback, 0, 200, 180, wnd_flag_dialog, 0
 	add_button 10, 100, 10, 35, id_push, 0, 'Push'
 	add_custom 10, -10, 80, -10, id_custom, wnd_item_flag_grow_r | wnd_item_flag_grow_b, 'Custom'
 	add_button 10, 100, 45, 70, id_two_of_them, 0, 'Two of them'
 	wnd_end
 
 alert_description:
-	wnd_start 'Alert', window_callback, 2, 200, 100
+	wnd_start 'Alert', window_callback, 2, 200, 100, wnd_flag_dialog, 0
 	add_static 10, 180, 10, 35, 0, 0, 'You clicked the button.'
 	add_button 10, 100, 10 + 25, 35 + 25, id_ok, 0, 'OK'
 	wnd_end

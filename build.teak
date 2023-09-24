@@ -6,11 +6,17 @@ void GetOptions() {
 	ConsoleWriteStdout("[debug]\nexe=bin/test\n");
 }
 
-void Start() {
-	assert PathCreateDirectory("bin");
+void ConvertIconGroup(str file, str symbol) {
+	str out = "bin/%symbol%.s";
 
-	im.Bitmap icons = im.Load(FileReadAll("icons.png"):assert()):assert();
-	str iconsOut = "icons:\n";
+	if PathExists(out) && FileGetLastModificationTimeStamp(out):assert() >= FileGetLastModificationTimeStamp(file):assert() {
+		return;
+	}
+
+	Log("...");
+
+	im.Bitmap icons = im.Load(FileReadAll(file):assert()):assert();
+	str iconsOut = "%symbol%:\n";
 
 	for int y = 0; y < im.Height(icons); y += 1 {
 		iconsOut += "\tdb ";
@@ -47,7 +53,14 @@ void Start() {
 		iconsOut += "\n";
 	}
 
-	assert FileWriteAll("bin/icons.s", iconsOut);
+	assert FileWriteAll(out, iconsOut);
+}
+
+void Start() {
+	assert PathCreateDirectory("bin");
+
+	ConvertIconGroup("icons.png", "icons");
+	ConvertIconGroup("reszpad.png", "reszpad");
 
 	str fileList = "bin/system  'k16.sys' "
 		     + "bin/test    'test.exe' "
