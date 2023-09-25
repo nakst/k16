@@ -1,3 +1,6 @@
+; TODO Menus: sending commands not working!!!
+; TODO Menus: Window menu.
+; TODO Menus: Clicking on the menubar to close the menu
 ; TODO Handling when both mouse buttons are pressed at the same time.
 ; TODO Clipping items to their window using the secondary clip rectangle.
 ; TODO Optimization: In wndmgr_repaint, immediately skip over windows that don't intersect the clip.
@@ -38,7 +41,9 @@ input_event_queue_count equ 10 ; TODO Is this long enough?
 wnd_client_off_x equ 3
 wnd_client_off_y equ 23
 
-wndmgr_send_callback: ; input: ax = window, es:bx = item, cx = message code, dx = message data 1, si = message data 2, di = message data 3, ds = 0; preserves: everything
+window_menu_id equ 1
+
+wndmgr_send_callback: ; input: ax = window, es:bx = item(?), cx = message code, dx = message data 1, si = message data 2, di = message data 3, ds = 0; preserves: everything
 	push	ax
 	push	bx
 	push	cx
@@ -509,15 +514,16 @@ wndmgr_setup:
 	call	wndmgr_push_input_event
 %endmacro
 
-;	simulate_click 124,10
-;	simulate_click 313,194
-;	simulate_click 313,154
+;	simulate_click 313,124
+;	simulate_click 60,10
+;	simulate_click 60,30
+;	simulate_click 313,124
 ;	simulate_click 313,94
 	; maximum is input_event_queue_count / 2
 
-;	mov	bx,50
+;	mov	bx,124
 ;	mov	[cursor_x],bx
-;	mov	bx,23
+;	mov	bx,60
 ;	mov	[cursor_y],bx
 ;	mov	bx,input_event_type_left_down
 ;	call	wndmgr_push_input_event
@@ -542,10 +548,127 @@ menu_callback:
 	jne	.return
 	cmp	cx,msg_custom_draw
 	je	.on_draw
+	cmp	cx,msg_custom_mouse
+	je	.on_mouse
 	.return:
 	iret
 
+	.on_mouse:
+	cmp	si,1
+	je	.do_mouse
+	cmp	si,0xFFFF
+	je	.do_mouse
+	iret
+
+	.do_mouse:
+	mov	bx,si
+	mov	[menubar_callback.mouse_command],bl
+	mov	es,ax
+	mov	dx,[es:wnd_t]
+	add	dx,4
+	sub	dx,[cursor_y_sync]
+
+	mov	bx,sys_wnd_get_extra
+	int	0x20
+	mov	bx,[es:2]
+	cmp	bx,window_menu_id
+	jne	.normal_menu2
+	xor	bx,bx
+	mov	es,bx
+	mov	bx,.window_menu
+	jmp	.item_loop2
+	.normal_menu2:
+	mov	es,[es:0]
+	mov	es,[es:wnd_segment]
+	.item_loop2:
+	mov	cl,[es:bx]
+	or	cl,cl
+	jz	.return
+	test	word [es:bx + 3],menu_flag_separator
+	jnz	.separator2
+	add	dx,18
+	jmp	.next_item2
+	.separator2:
+	add	dx,6
+	.next_item2:
+	cmp	dx,0
+	jge	.found_hot_item
+	xor	ch,ch
+	add	bx,cx
+	add	bx,5
+	jmp	.item_loop2
+	.found_hot_item:
+	cmp	byte [menubar_callback.mouse_command],1
+	je	.click_item
+	add	dx,[cursor_y_sync]
+	cmp	byte [.invert_rect_mode],2
+	mov	byte [.invert_rect_mode],1
+	jne	.no_prev_invert
+	cmp	[.invert_rect + rect_b],dx
+	je	.did_invert
+	push	dx
+	push	bx
+	mov	bx,sys_wnd_redraw
+	mov	dx,1
+	int	0x20
+	pop	bx
+	pop	dx
+	.no_prev_invert:
+	test	word [es:bx + 3],menu_flag_separator
+	jnz	.no_invert_separator
+	mov	[.invert_rect + rect_b],dx
+	sub	dx,18
+	mov	[.invert_rect + rect_t],dx
+	mov	bx,sys_wnd_redraw
+	mov	dx,1
+	int	0x20
+	.did_invert:
+	mov	byte [.invert_rect_mode],2
+	iret
+	.no_invert_separator:
+	mov	byte [.invert_rect_mode],0
+	iret
+	.click_item:
+	test	word [es:bx + 3],menu_flag_separator
+	jnz	.return
+	push	bx
+	mov	bx,sys_wnd_get_extra
+	int	0x20
+	pop	bx
+	call	wndmgr_close_menu
+	cmp	word [es:2],window_menu_id
+	jne	.normal_menu_click
+	mov	dx,[bx + 1]
+	mov	es,[es:0]
+	mov	ax,es
+	mov	es,[es:wnd_segment]
+	jmp	.send_command
+	.normal_menu_click:
+	mov	es,[es:0]
+	mov	ax,es
+	mov	es,[es:wnd_segment]
+	mov	dx,[es:bx + 1]
+	.send_command:
+	xor	bx,bx
+	mov	cx,msg_menu_command
+	call	wndmgr_send_callback
+	mov	byte [.invert_rect_mode],0
+	iret
+
 	.on_draw:
+	cmp	byte [.invert_rect_mode],1
+	jne	.draw_background
+	mov	ax,[di + rect_l]
+	add	ax,4
+	mov	[.invert_rect + rect_l],ax
+	mov	ax,[di + rect_r]
+	sub	ax,4
+	mov	[.invert_rect + rect_r],ax
+	mov	di,.invert_rect
+	mov	bx,sys_draw_invert
+	int	0x20
+	iret
+
 	.draw_background:
 	or	si,si
 	jnz	exception_handler
@@ -567,8 +690,16 @@ menu_callback:
 	mov	bx,sys_wnd_get_extra
 	int	0x20
 	mov	bx,[es:2]
-	mov	es,[es:0]
+	cmp	bx,window_menu_id
+	jne	.normal_menu
+	xor	bx,bx
+	mov	es,bx
+	mov	bx,.window_menu
+	jmp	.item_loop
 
+	.normal_menu:
+	mov	es,[es:0]
+	mov	es,[es:wnd_segment]
 	.item_loop:
 	mov	al,[es:bx]
 	or	al,al
@@ -613,6 +744,56 @@ menu_callback:
 	add	bx,5
 	jmp	.item_loop
 
+	.on_mouse_move:
+	mov	ax,[menu_list]
+	call	dll_last
+	mov	es,ax
+	mov	ax,[cursor_x_sync]
+	cmp	ax,[es:wnd_l]
+	jl	menubar_callback.on_mouse_move
+	cmp	ax,[es:wnd_r]
+	jge	menubar_callback.on_mouse_move
+	mov	ax,[cursor_y_sync]
+	cmp	ax,[es:wnd_t]
+	jl	menubar_callback.on_mouse_move
+	cmp	ax,[es:wnd_b]
+	jge	menubar_callback.on_mouse_move
+	mov	ax,[menu_list]
+	call	dll_last
+	jmp	menubar_callback.on_mouse_move_send_callback
+
+	.invert_rect: dw 0,0,0,0
+	.invert_rect_mode: db 0
+
+	.window_menu:
+	menu_start
+	add_menu 'Close',menu_command_close,0
+	menu_end
+
+wndmgr_close_menu: ; input: ds = 0; preserves: ds
+	mov	byte [menu_callback.invert_rect_mode],0
+	push	ax
+	push	bx
+	push	dx
+	cmp	word [menu_source],0
+	je	.return
+	mov	word [menu_source],0
+	mov	ax,[menu_list]
+	call	dll_last
+	mov	bx,sys_wnd_destroy
+	int	0x20
+	mov	ax,[menubar_window]
+	mov	byte [menubar_callback.invert_rect_mode],1
+	mov	bx,sys_wnd_redraw
+	mov	dx,1
+	int	0x20
+	mov	byte [menubar_callback.invert_rect_mode],0
+	.return:
+	pop	dx
+	pop	bx
+	pop	ax
+	ret
+
 menubar_callback:
 	cmp	dx,1
 	jne	.return
@@ -624,7 +805,14 @@ menubar_callback:
 
 	.on_mouse:
 	cmp	si,1
-	jne	.return
+	je	.do_mouse
+	cmp	si,0xFFFF
+	je	.do_mouse
+	iret
+	
+	.do_mouse:
+	mov	bx,si
+	mov	[.mouse_command],bl
 
 	mov	bx,sys_wnd_get_rect
 	mov	di,.out_rect
@@ -651,7 +839,7 @@ menubar_callback:
 	mov	al,1
 	call	.hit_test_item
 	pop	ds
-	mov	si,0
+	mov	si,window_menu_id
 	mov	ax,[es:wnd_segment]
 	mov	bx,[es:wnd_sz + wnd_desc_menubar]
 	mov	es,ax
@@ -682,7 +870,7 @@ menubar_callback:
 	.on_draw:
 	cmp	byte [.invert_rect_mode],1
 	jne	.draw_background
-	mov	di,.out_rect
+	mov	di,.invert_rect
 	mov	bx,sys_draw_invert
 	int	0x20
 	iret
@@ -795,6 +983,10 @@ menubar_callback:
 	.clicked_item:
 	mov	si,[es:bx + 1]
 	.clicked_first_item:
+	cmp	[menu_source],si
+	je	.close_menu_only
+	call	wndmgr_close_menu
+	mov	[menu_source],si
 	add	dx,[cursor_x_sync]
 	add	cx,[cursor_x_sync]
 	mov	ax,menu_description
@@ -803,10 +995,14 @@ menubar_callback:
 	mov	bx,sys_wnd_get_extra
 	mov	di,es
 	int	0x20
-	mov	[es:0],di
+	push	ax
+	mov	ax,[window_list]
+	call	dll_last
+	mov	[es:0],ax
+	pop	ax
 	mov	[es:2],si
-	mov	[.out_rect + rect_l],dx
-	mov	[.out_rect + rect_r],cx
+	mov	[.invert_rect + rect_l],dx
+	mov	[.invert_rect + rect_r],cx
 	mov	es,ax
 	mov	[es:wnd_l],dx
 	add	dx,100
@@ -817,6 +1013,11 @@ menubar_callback:
 	mov	bx,si
 	push	es
 	mov	es,di
+	cmp	si,window_menu_id
+	jne	.determine_height
+	xor	bx,bx
+	mov	es,bx
+	mov	bx,menu_callback.window_menu
 	.determine_height:
 	mov	dl,[es:bx]
 	or	dl,dl
@@ -835,25 +1036,55 @@ menubar_callback:
 	mov	word [es:wnd_b],cx
 	mov	bx,sys_wnd_show
 	int	0x20
-	mov	byte [.invert_rect_mode],1
 	mov	ax,[menubar_window]
 	mov	es,ax
 	mov	bx,[es:wnd_t]
-	mov	[.out_rect + rect_t],bx
+	mov	[.invert_rect + rect_t],bx
 	mov	bx,[es:wnd_b]
-	mov	[.out_rect + rect_b],bx
+	mov	[.invert_rect + rect_b],bx
+	mov	byte [.invert_rect_mode],1
 	mov	bx,sys_wnd_redraw
 	mov	dx,1
 	int	0x20
 	mov	byte [.invert_rect_mode],0
 	iret
 
+	.close_menu_only:
+	cmp	byte [.mouse_command],0xFF
+	je	.return
+	call	wndmgr_close_menu
+	iret
+
 	.return:
 	iret
 
+	.on_mouse_move:
+	mov	ax,[menubar_window]
+	mov	es,ax
+	mov	ax,[cursor_x_sync]
+	cmp	ax,[es:wnd_l]
+	jl	wndmgr_event_loop.loop
+	cmp	ax,[es:wnd_r]
+	jge	wndmgr_event_loop.loop
+	mov	ax,[cursor_y_sync]
+	cmp	ax,[es:wnd_t]
+	jl	wndmgr_event_loop.loop
+	cmp	ax,[es:wnd_b]
+	jge	wndmgr_event_loop.loop
+	mov	ax,[menubar_window]
+	.on_mouse_move_send_callback:
+	mov	bx,wnd_sz + wnd_desc_sz
+	mov	cx,msg_custom_mouse
+	mov	dx,1
+	mov	si,0xFFFF
+	call	wndmgr_send_callback
+	jmp	wndmgr_event_loop.loop
+
 	.out_rect: dw 0,0,0,0
 	.untitled_string: db '???',0
+	.invert_rect: dw 0,0,0,0
 	.invert_rect_mode: db 0
+	.mouse_command: db 0
 
 wndmgr_event_loop:
 	xor	ax,ax ; since apps iret to here after callback
@@ -868,6 +1099,8 @@ wndmgr_event_loop:
 	.no_input_event:
 	call	wndmgr_update_cursor_pos
 	jc	.wait
+	cmp	word [menu_source],0
+	jnz	menu_callback.on_mouse_move
 	mov	bx,[hot_item]
 	or	bx,bx
 	jz	.loop
@@ -1033,6 +1266,8 @@ wndmgr_process_input_event: ; input: ds = 0, ax = type; trashes: all except ds
 	mov	ax,[menu_list]
 	jmp	.find_item_under_cursor_window_loop
 	.find_item_under_cursor_repeat:
+	cmp	word [menu_source],0
+	jnz	.close_menu_only
 	cmp	ax,[menu_list]
 	jne	.find_item_under_cursor_window_loop_end
 	mov	ax,[window_list]
@@ -1088,6 +1323,9 @@ wndmgr_process_input_event: ; input: ds = 0, ax = type; trashes: all except ds
 	mov	[hot_window],ax
 	mov	[hot_item],ax
 	ret
+	.close_menu_only:
+	call	wndmgr_close_menu
+	jmp	.find_item_under_cursor_window_loop_end
 
 wndmgr_push_input_event: ; input: bl = type, bh = data, ds = 0; preserves: everything
 	push	cx
@@ -2060,6 +2298,8 @@ do_alert_error:
 	add_button 10, 90, 41, 64, 1, 0, 'OK'
 	wnd_end
 	.callback: 
+	cmp	cx,msg_menu_command
+	je	.menu_command
 	cmp	dx,1
 	jne	.done
 	cmp	cx,msg_btn_clicked
@@ -2067,6 +2307,12 @@ do_alert_error:
 	mov	bx,sys_wnd_destroy
 	int	0x20
 	.done:
+	iret
+	.menu_command:
+	cmp	dx,menu_command_close
+	jne	.done
+	mov	bx,sys_wnd_destroy
+	int	0x20
 	iret
 
 do_cursor_get:
@@ -2171,4 +2417,5 @@ cursor_drawn_x: dw 30
 cursor_drawn_y: dw 45
 mouse_left_async: db 0
 mouse_right_async: db 0
+menu_source: dw 0
 input_event_queue: times (input_event_sz * input_event_queue_count) db 0 ; TODO This is wasting space...

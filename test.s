@@ -18,6 +18,8 @@ start:
 	iret
 
 window_callback:
+	cmp	cx,msg_menu_command
+	je	.menu_command
 	cmp	cx,msg_btn_clicked
 	je	.clicked
 	cmp	cx,msg_custom_draw
@@ -26,6 +28,16 @@ window_callback:
 	je	.mouse
 	cmp	cx,msg_custom_drag
 	je	.drag
+	iret
+
+	.menu_command:
+	cmp	dx,menu_command_close
+	je	.close
+	iret
+
+	.close:
+	mov	bx,sys_wnd_destroy
+	int	0x20
 	iret
 
 	.drag:

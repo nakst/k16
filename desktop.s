@@ -309,8 +309,27 @@ class_file_list:
 	.mstrrect: dw 0,0,0,0
 
 fm_window_callback:
+	cmp	cx,msg_menu_command
+	je	.menu_command
 	cmp	dx,id_file_list
 	je	class_file_list.dispatch
+	iret
+
+	.menu_command:
+	cmp	dx,menu_command_close
+	je	.close
+	iret
+
+	.close:
+	mov	bx,sys_wnd_get_extra
+	int	0x20
+	push	ax
+	mov	ax,[es:fm_window_listing]
+	mov	bx,sys_heap_free
+	int	0x20
+	pop	ax
+	mov	bx,sys_wnd_destroy
+	int	0x20
 	iret
 
 fm_window_description:

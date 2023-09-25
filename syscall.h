@@ -125,13 +125,16 @@ msg_btn_clicked  equ 0x0001 ; ax = window, dx = id
 msg_custom_draw  equ 0x0002 ; ax = window, dx = id, si = rect segment, di = rect (rect can be overwritten)
 msg_custom_mouse equ 0x0003 ; ax = window, dx = id, si = [bit 0 = down, bit 1 = button]
 msg_custom_drag  equ 0x0004 ; ax = window, dx = id
-; TODO msg_resize, msg_move, msg_close
+msg_menu_command equ 0x0005 ; ax = window, dx = command id
+; TODO msg_resize, msg_move
 msg_user_start   equ 0x8000
 
 _wnd_item_id_title    equ -1
 _wnd_item_id_reszpad  equ -2
 _wnd_item_id_scroll_x equ -3
 _wnd_item_id_scroll_y equ -4
+
+menu_command_close equ -1
 
 menu_flag_separator equ (1 << 0)
 
