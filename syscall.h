@@ -4,6 +4,7 @@
 ; all inputs (including bx) and flags are scratch registers unless otherwise noted!
 sys_display_word   equ 0x0000 ; input: ax = value to print
 sys_app_start      equ 0x0001 ; input: si = cstr path; output: ax = error code, si = result from app (trashed if error)
+sys_info_read      equ 0x0002 ; input: ax = value index; output: ax = output value
 sys_heap_alloc     equ 0x0100 ; input: ax = memory units to alloc (multiples of 16 bytes); output: ax = offset in memory units or 0 on error
 sys_heap_free      equ 0x0101 ; input: ax = offset in memory units
 sys_file_open_at   equ 0x0200 ; input: al = access mode, si = cstr name, dx = parent directory; output: ax = error code, dx = handle (trashed if error); this closes the parent directory handle
@@ -17,6 +18,7 @@ sys_draw_text      equ 0x0302 ; input: ah = color, al = bold flag, cx = x pos, d
 sys_measure_text   equ 0x0303 ; input: al = bold flag, [ds:]si = cstr, [es:]di = out rect; preserves: al, si, di
 sys_draw_icon      equ 0x0304 ; input: al = stride in pixels (multiple of 2), cx = x pos, dx = y pos, si = source, di = source rect; preserves: al, cx, dx, si, di; this uses magenta for the transparent mask
 sys_draw_invert    equ 0x0305 ; input: di = rect; preserves: di
+sys_hit_test_text  equ 0x0306 ; input: al = bold flag, [ds:]si = cstr, di = x pos; output: di = hit index (clamped); preserves: al, si
 sys_wnd_create     equ 0x0400 ; input: ax = window description, cs = owning module; output: ax = handle (0 if error)
 sys_wnd_destroy    equ 0x0401 ; input: ax = window handle
 sys_wnd_redraw     equ 0x0402 ; input: ax = window handle, dx = item id; preserves: ax, dx
@@ -37,7 +39,7 @@ error_exists    equ 0x07
 error_too_large equ 0x08
 error_bad_type  equ 0x09
 
-open_parent_root         equ 0xF000 ; TODO Implement.
+open_parent_root equ 0xF000 ; TODO Implement.
 
 open_access_read                  equ 0x00
 ; open_access_truncate            equ 0x01
@@ -46,6 +48,7 @@ open_access_read                  equ 0x00
 ; open_access_create_or_truncate  equ 0x04
 ; open_access_create_or_append    equ 0x05
 open_access_directory             equ 0x06
+; open_access_create_directory    equ 0x07
 
 file_ctrl_first_sector equ 0x00
 file_ctrl_curr_sector  equ 0x02
@@ -72,6 +75,17 @@ dirent_name_sz     equ 20
 dentry_attr_dir     equ (1 << 0)
 dentry_attr_present equ (1 << 1)
 
+key_state_ctrl   equ (1 << 0)
+key_state_lshift equ (1 << 1)
+key_state_rshift equ (1 << 2)
+key_state_alt    equ (1 << 3)
+key_state_capslk equ (1 << 4)
+key_state_numlk  equ (1 << 5)
+key_state_scrlk  equ (1 << 6)
+
+info_index_free_memory  equ 0 ; in 16 byte blocks
+info_index_total_memory equ 1 ; in 16 byte blocks
+
 rect_l  equ 0x00 ; signed words
 rect_r  equ 0x02
 rect_t  equ 0x04
@@ -93,7 +107,8 @@ wnd_item_id     equ 0x0A
 wnd_item_flags  equ 0x0C
 wnd_item_string equ 0x0E ; size is 0x0E + length of string
 
-wnd_item_flag_pushed equ (1 << 0)
+wnd_item_flag_pushed equ (1 << 0) ; for code_button
+wnd_item_flag_bold   equ (1 << 0) ; for code_static
 wnd_item_flag_grow_l equ (1 << 1) ; l is an offset from the right side of the window
 wnd_item_flag_grow_r equ (1 << 2) ; r is an offset from the right side of the window
 wnd_item_flag_grow_t equ (1 << 3) ; t is an offset from the bottom side of the window
@@ -111,6 +126,7 @@ wnd_item_code_static    equ 0x03
 wnd_item_code_custom    equ 0x04
 wnd_item_code_reszpad   equ 0x05
 wnd_item_code_scrollbar equ 0x06
+wnd_item_code_number    equ 0x07
 
 wnd_desc_callback equ 0x00
 wnd_desc_extra    equ 0x02 ; extra memory to allocate, access with sys_wnd_get_extra
@@ -121,12 +137,24 @@ wnd_desc_menubar  equ 0x0A
 wnd_desc_sz       equ 0x0C
 
 ; cx = msg code
-msg_btn_clicked  equ 0x0001 ; ax = window, dx = id
-msg_custom_draw  equ 0x0002 ; ax = window, dx = id, si = rect segment, di = rect (rect can be overwritten)
-msg_custom_mouse equ 0x0003 ; ax = window, dx = id, si = [bit 0 = down, bit 1 = button]
-msg_custom_drag  equ 0x0004 ; ax = window, dx = id
-msg_menu_command equ 0x0005 ; ax = window, dx = command id
+
+; code_button
+msg_btn_clicked  equ 0x0101 ; ax = window, dx = id
+
+; code_custom
+msg_custom_draw  equ 0x0201 ; ax = window, dx = id, si = rect segment, di = rect (rect can be overwritten)
+msg_custom_mouse equ 0x0202 ; ax = window, dx = id, si = [bit 0 = down, bit 1 = button]
+msg_custom_drag  equ 0x0203 ; ax = window, dx = id
+
+; code_number
+msg_number_get   equ 0x0301 ; ax = window, dx = id, si = out segment, di = out (write a word)
+
+; general
+msg_menu_command equ 0x1005 ; ax = window, dx = command id
+msg_key_down     equ 0x1006 ; ax = window, dl = code, dh = state bits
+msg_key_up       equ 0x1007 ; ax = window, dl = code, dh = state bits
 ; TODO msg_resize, msg_move
+
 msg_user_start   equ 0x8000
 
 _wnd_item_id_title    equ -1
@@ -156,6 +184,10 @@ menu_flag_separator equ (1 << 0)
 
 %macro add_static 7 ; left, right, top, bottom, id, flags, string
 	add_wnditem wnd_item_code_static, %1, %2, %3, %4, %5, %6, %7
+%endmacro
+
+%macro add_number 7 ; left, right, top, bottom, id, flags, string
+	add_wnditem wnd_item_code_number, %1, %2, %3, %4, %5, %6, %7
 %endmacro
 
 %macro add_custom 7 ; left, right, top, bottom, id, flags, string

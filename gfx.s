@@ -922,6 +922,7 @@ gfx_draw_block_single:
 	.color: db 0
 
 gfx_draw_invert_plane:
+	push	ds
 	push	di
 
 	call	gfx_prepare_clipped_rect
@@ -977,6 +978,7 @@ gfx_draw_invert_plane:
 
 	.return:
 	pop	di
+	pop	ds
 	ret
 
 	.thin:
@@ -1741,6 +1743,11 @@ do_draw_icon:
 	pop	es
 	iret
 
+do_hit_test_text:
+	; TODO
+	xor	di,di
+	iret
+
 do_measure_text:
 	push	ax
 	push	bx
@@ -1849,6 +1856,8 @@ do_gfx_syscall:
 	jz	do_draw_icon
 	dec	bl
 	jz	do_draw_invert
+	dec	bl
+	jz	do_hit_test_text
 	jmp	exception_handler
 
 gfx_width:  dw 0

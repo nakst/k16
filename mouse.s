@@ -59,6 +59,7 @@ mouse_setup:
 	ret
 
 mouse_isr:
+	cld
 	push	ax
 	push	dx
 	push	ds

@@ -48,8 +48,9 @@ start:
 	mov	[0x20 * 4 + 0x02],ax
 
 	call	heap_setup
-	call	disk_buffers_alloc
+	call	diskio_setup
 	call	mouse_setup
+	call	keybrd_setup
 	call	gfx_setup
 	call	wndmgr_setup
 
@@ -75,7 +76,7 @@ start:
 	int	0x20
 	jmp	wndmgr_event_loop
 
-	.desktop_path: db 's:desktop.sys',0
+	.desktop_path: db 's:',FIRST_APPLICATION,0
 	.desktop_load_error:
 		wnd_start 'System Error', do_alert_error.callback, 0, 200, 100, wnd_flag_dialog, 0
 		add_static 10, 180, 10, 35, 0, 0, 'Missing system file "desktop.exe".'
@@ -86,6 +87,7 @@ start:
 %include "diskio.s"
 %include "gfx.s"
 %include "mouse.s"
+%include "keybrd.s"
 %include "wndmgr.s"
 
 module_free: ; input: ax = module
@@ -341,11 +343,32 @@ print_cstring:
 	pop	bx
 	ret
 
+do_info_read:
+	or	ax,ax
+	jz	.read_free_memory
+	dec	ax
+	jz	.read_total_memory
+	jmp	exception_handler
+
+	.read_free_memory:
+	call	heap_get_free_count
+	iret
+
+	.read_total_memory:
+	push	ds
+	xor	ax,ax
+	mov	ds,ax
+	mov	ax,[heap_total]
+	pop	ds
+	iret
+
 do_misc_syscall:
 	or	bl,bl
 	jz	do_display_word
 	dec	bl
 	jz	do_app_start
+	dec	bl
+	jz	do_info_read
 	jmp	exception_handler
 
 int_0x20:

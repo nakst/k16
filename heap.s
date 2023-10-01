@@ -129,6 +129,7 @@ heap_setup:
 	int	0x12
 	mov	bx,0x40
 	mul	bx
+	mov	[heap_total],ax
 	dec	ax
 	mov	bx,[heap_start]
 	mov	es,bx
@@ -143,6 +144,65 @@ heap_setup:
 	mov	word [es:heap_entry_prev],bx
 	mov	word [es:heap_entry_next],0x0000
 	mov	word [es:heap_entry_status],heap_status_used ; prevent merging after end
+	ret
+
+heap_get_free_count: ; output: ax = free memory as a multiple of 16 bytes
+	push	bx
+	push	cx
+	push	ds
+	xor	ax,ax
+	mov	ds,ax
+	mov	bx,[heap_start]
+	mov	ds,bx
+	.loop:
+	mov	bx,[heap_entry_next]
+	or	bx,bx
+	jz	.done
+	cmp	word [heap_entry_status],heap_status_free
+	jne	.not_free
+	add	ax,bx
+	mov	cx,ds
+	sub	ax,cx
+	.not_free:
+	mov	ds,bx
+	jmp	.loop
+	.done:
+	pop	ds
+	pop	cx
+	pop	bx
+	ret
+
+heap_walk_quiet:
+	push	ax
+	push	bx
+	push	cx
+	push	dx
+	push	si
+	push	di
+	push	ds
+	push	es
+	xor	bx,bx
+	mov	ds,bx
+	mov	bx,[heap_start]
+	mov	es,bx
+	xor	cx,cx
+	.loop:
+	mov	ax,[es:heap_entry_prev]
+	cmp	ax,cx
+	jne	heap_walk.corrupt
+	mov	cx,es
+	mov	ax,[es:heap_entry_next]
+	mov	es,ax
+	or	ax,ax
+	jnz	.loop
+	pop	es
+	pop	ds
+	pop	di
+	pop	si
+	pop	dx
+	pop	cx
+	pop	bx
+	pop	ax
 	ret
 
 heap_walk:
@@ -259,6 +319,8 @@ do_heap_alloc:
 
 do_heap_free:
 	; NOTE DS is not set here!
+	or	ax,ax
+	jz	.return2
 	dec	ax
 	push	es
 	push	cx
@@ -288,6 +350,7 @@ do_heap_free:
 	pop	bx
 	pop	cx
 	pop	es
+	.return2:
 	iret
 
 do_heap_syscall:
@@ -298,3 +361,4 @@ do_heap_syscall:
 	jmp	exception_handler
 
 heap_start: dw 0 ; as a multiple of 16 bytes
+heap_total: dw 0 ; total system memory

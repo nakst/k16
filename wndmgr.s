@@ -1,10 +1,11 @@
+; TODO Don't hlt if there are still events in the input queue. Currently key repeat misbehaves.
 ; TODO Menus: sending commands not working!!!
 ; TODO Menus: Window menu.
 ; TODO Menus: Clicking on the menubar to close the menu
 ; TODO Handling when both mouse buttons are pressed at the same time.
 ; TODO Clipping items to their window using the secondary clip rectangle.
 ; TODO Optimization: In wndmgr_repaint, immediately skip over windows that don't intersect the clip.
-; TODO Optimization: Button don't need to draw their own background if wndmgr_repaint has draw it (wnd_flag_dialog mode).
+; TODO Optimization: class_button, class_static and class_number don't need to draw their own background if wndmgr_repaint has drawn it (wnd_flag_dialog mode).
 ; TODO Destroying/operating upon windows that have not been shown (see wnd_shown).
 ; TODO Automatic placement of the client content with wnd_flag_scrolled.
 ; TODO Optimization: Don't redraw the entire window when activating.
@@ -35,8 +36,18 @@ input_event_type_left_down  equ 0x01
 input_event_type_right_down equ 0x02
 input_event_type_left_up    equ 0x03
 input_event_type_right_up   equ 0x04
+input_event_type_key_down   equ 0x05
+input_event_type_key_up     equ 0x06
 
-input_event_queue_count equ 10 ; TODO Is this long enough?
+input_event_queue_count equ 16 ; TODO Is this long enough?
+
+key_ctrl   equ 29
+key_lshift equ 42
+key_rshift equ 54
+key_alt    equ 56
+key_capslk equ 58
+key_numlk  equ 69
+key_scrlk  equ 70
 
 wnd_client_off_x equ 3
 wnd_client_off_y equ 23
@@ -416,8 +427,15 @@ class_reszpad:
 
 class_static:
 	.on_draw:
+	mov	cl,7
+	mov	bx,sys_draw_block
+	int	0x20
 	push	si
 	xor	ax,ax
+	test	word [es:si + wnd_item_flags],wnd_item_flag_bold
+	jz	.not_bold
+	inc	al
+	.not_bold:
 	mov	cx,[di + rect_l]
 	mov	dx,[di + rect_t]
 	add	dx,[def_font]
@@ -430,6 +448,51 @@ class_static:
 	pop	ds
 	pop	si
 	ret
+
+class_number:
+	.on_draw:
+	mov	ax,cx
+	mov	cl,7
+	mov	bx,sys_draw_block
+	int	0x20
+	push	si
+	push	di
+	mov	bx,si
+	mov	cx,msg_number_get
+	mov	dx,[es:bx + wnd_item_id]
+	xor	si,si
+	mov	di,.value
+	call	wndmgr_send_callback
+	pop	di
+	pop	si
+	push	si
+	xor	ax,ax
+	test	word [es:si + wnd_item_flags],wnd_item_flag_bold
+	jz	.not_bold
+	inc	al
+	.not_bold:
+	push	ax
+	mov	ax,[.value]
+	mov	si,.strbuf + 5
+	.loop:
+	dec	si
+	xor	dx,dx
+	mov	bx,10
+	div	bx
+	add	dx,'0'
+	mov	[si],dl
+	or	ax,ax
+	jnz	.loop
+	pop	ax
+	mov	cx,[di + rect_l]
+	mov	dx,[di + rect_t]
+	add	dx,[def_font]
+	mov	bx,sys_draw_text
+	int	0x20
+	pop	si
+	ret
+	.value: dw 0
+	.strbuf: db 0,0,0,0,0,0
 
 class_custom:
 	.on_left_down: ; input: ax = window, es:bx = item, ds = 0; trashes: everything except ds
@@ -514,11 +577,27 @@ wndmgr_setup:
 	call	wndmgr_push_input_event
 %endmacro
 
-;	simulate_click 313,124
-;	simulate_click 60,10
-;	simulate_click 60,30
-;	simulate_click 313,124
-;	simulate_click 313,94
+%macro simulate_keydown 1
+	mov	bx,input_event_type_key_down | ((%1) << 8)
+	call	wndmgr_push_input_event
+%endmacro
+
+;	simulate_keydown 20
+;	simulate_keydown 21
+;	simulate_keydown 75
+;	simulate_keydown 28
+;	simulate_keydown 28
+;	simulate_keydown 72
+;	simulate_keydown 28
+;	simulate_keydown 59
+;	simulate_keydown 72
+;	simulate_keydown 28
+;	simulate_keydown 72
+;	simulate_click 250,216
+;	simulate_click 233,84
+;	simulate_click 384,124
+;	simulate_click 10,10
+;	simulate_click 15,35
 	; maximum is input_event_queue_count / 2
 
 ;	mov	bx,124
@@ -1152,6 +1231,7 @@ wndmgr_get_input_event: ; input: ds = 0; output: ax = type, cf = no event; trash
 	mov	di,input_event_queue
 	add	si,di
 	rep	movsb
+	mov	byte [input_event_queue + (input_event_queue_count - 1) * input_event_sz + input_event_type],0
 
 	pop	ax
 	mov	[cursor_y_sync],ax
@@ -1168,8 +1248,9 @@ wndmgr_get_input_event: ; input: ds = 0; output: ax = type, cf = no event; trash
 	stc
 	ret
 
-wndmgr_process_input_event: ; input: ds = 0, ax = type; trashes: all except ds
+wndmgr_process_input_event: ; input: ds = 0, ax = data/type; trashes: all except ds
 	.process:
+	; call	heap_walk_quiet
 	cmp	al,input_event_type_left_down
 	je	.on_left_down
 	cmp	al,input_event_type_left_up
@@ -1178,10 +1259,74 @@ wndmgr_process_input_event: ; input: ds = 0, ax = type; trashes: all except ds
 	je	.on_right_down
 	cmp	al,input_event_type_right_up
 	je	.on_right_up
+	cmp	al,input_event_type_key_down
+	je	.on_key_down
+	cmp	al,input_event_type_key_up
+	je	.on_key_up
 	jmp	exception_handler
 
 	.no_event:
 	ret
+
+	.on_key_down:
+	cmp	ah,key_ctrl
+	jne	.kd1
+	or	byte [keyboard_state_bits],key_state_ctrl
+	.kd1:
+	cmp	ah,key_lshift
+	jne	.kd2
+	or	byte [keyboard_state_bits],key_state_lshift
+	.kd2:
+	cmp	ah,key_rshift
+	jne	.kd3
+	or	byte [keyboard_state_bits],key_state_rshift
+	.kd3:
+	cmp	ah,key_alt
+	jne	.kd4
+	or	byte [keyboard_state_bits],key_state_alt
+	.kd4:
+	cmp	ah,key_capslk
+	jne	.kd5
+	xor	byte [keyboard_state_bits],key_state_capslk
+	.kd5:
+	cmp	ah,key_numlk
+	jne	.kd6
+	xor	byte [keyboard_state_bits],key_state_numlk
+	.kd6:
+	cmp	ah,key_scrlk
+	jne	.kd7
+	xor	byte [keyboard_state_bits],key_state_scrlk
+	.kd7:
+	mov	cx,msg_key_down
+	.send_key_event:
+	mov	dl,ah
+	mov	dh,[keyboard_state_bits]
+	mov	ax,[window_list]
+	call	dll_last
+	call	dll_is_list
+	jc	.no_event
+	mov	es,ax
+	jmp	wndmgr_send_callback
+
+	.on_key_up:
+	cmp	ah,key_ctrl
+	jne	.ku1
+	and	byte [keyboard_state_bits],~key_state_ctrl
+	.ku1:
+	cmp	ah,key_lshift
+	jne	.ku2
+	and	byte [keyboard_state_bits],~key_state_lshift
+	.ku2:
+	cmp	ah,key_rshift
+	jne	.ku3
+	and	byte [keyboard_state_bits],~key_state_rshift
+	.ku3:
+	cmp	ah,key_alt
+	jne	.ku4
+	and	byte [keyboard_state_bits],~key_state_alt
+	.ku4:
+	mov	cx,msg_key_up
+	jmp	.send_key_event
 
 	.on_left_down:
 	call	.find_item_under_cursor
@@ -1349,6 +1494,18 @@ wndmgr_push_input_event: ; input: bl = type, bh = data, ds = 0; preserves: every
 	pop	cx
 	ret
 
+wndmgr_press_key: ; input: al = key, ah = up flag, ds = 0; preserves: everything; can run in interrupts
+	push	bx
+	mov	bl,input_event_type_key_down
+	or	ah,ah
+	jz	.down
+	inc	bl
+	.down:
+	mov	bh,al
+	call	wndmgr_push_input_event
+	pop	bx
+	ret
+
 wndmgr_mouse_buttons: ; input: al = left, ah = right, ds = 0; preserves: everything; can run in interrupts
 	push	bx
 
@@ -1457,6 +1614,8 @@ wndmgr_repaint_item_internal: ; input: es:si = item, cx = window, ds = 0; preser
 	jz	class_reszpad.on_draw
 	dec	al
 	jz	class_scrollbar.on_draw
+	dec	al
+	jz	class_number.on_draw
 	jmp	exception_handler
 
 	.set_rect:
@@ -2418,4 +2577,5 @@ cursor_drawn_y: dw 45
 mouse_left_async: db 0
 mouse_right_async: db 0
 menu_source: dw 0
+keyboard_state_bits: db 0
 input_event_queue: times (input_event_sz * input_event_queue_count) db 0 ; TODO This is wasting space...

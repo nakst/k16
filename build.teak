@@ -1,6 +1,9 @@
 #import "core:modules/imaging" im;
 
 bool use86Box #option;
+str firstApplication #option("desktop.sys");
+
+str fileList;
 
 void GetOptions() {
 	ConsoleWriteStdout("[debug]\nexe=bin/test\n");
@@ -56,23 +59,29 @@ void ConvertIconGroup(str file, str symbol) {
 	assert FileWriteAll(out, iconsOut);
 }
 
+void BuildApplication(str name) {
+	assert SystemShellExecute("nasm -fbin -obin/%name% %name%.s");
+	fileList += "bin/%name% '%name%.exe' ";
+}
+
 void Start() {
 	assert PathCreateDirectory("bin");
 
 	ConvertIconGroup("icons.png", "icons");
 	ConvertIconGroup("reszpad.png", "reszpad");
 
-	str fileList = "bin/system  'k16.sys' "
-		     + "bin/test    'test.exe' "
-		     + "bin/desktop 'desktop.sys' ";
+	fileList = "bin/system  'k16.sys' "
+		 + "bin/desktop 'desktop.sys' ";
+
+	BuildApplication("texted");
+	BuildApplication("sysinfo");
 
 	assert SystemShellExecute("cc -obin/mkfs mkfs.c");
 	assert SystemShellExecute("cc -obin/fontconv fontconv.c");
 	assert SystemShellExecute("bin/fontconv sans.font bin/sansfont.s def_font");
 	assert SystemShellExecute("nasm -fbin -obin/boot boot.s");
-	assert SystemShellExecute("nasm -fbin -obin/system system.s");
+	assert SystemShellExecute("nasm -fbin -obin/system system.s -DFIRST_APPLICATION=\\'%firstApplication%\\'");
 	assert SystemShellExecute("nasm -fbin -obin/desktop desktop.s");
-	assert SystemShellExecute("nasm -fbin -obin/test test.s");
 	assert SystemShellExecute("bin/mkfs %fileList%");
 
 	if use86Box {

@@ -59,8 +59,8 @@ int main(int argc, char **argv) {
 		entry->firstSector = currentSector;
 		entry->sizeLow = byteCount & 0xFFFF;
 		entry->sizeHigh = (byteCount >> 16) & 0xFFFF;
-		entry->xPosition = 20 + i * 70;
-		entry->yPosition = 15;
+		entry->xPosition = 24 + (i % 3) * 70;
+		entry->yPosition = 15 + (i / 3) * 60;
 
 		for (uintptr_t j = 0; j < sectorCount; j++, currentSector++) {
 			sectorTable[currentSector] = j == sectorCount - 1 ? 0xFFFE : (currentSector + 1);

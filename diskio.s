@@ -545,7 +545,8 @@ disk_buffers_read: ; input: ax = sector, dl = drive number; output: es = segment
 	stc
 	jmp	.return
 
-disk_buffers_alloc:
+diskio_setup:
+	.alloc_buffers:
 	int	0x12
 	cmp	ax,100
 	jb	out_of_memory_error
