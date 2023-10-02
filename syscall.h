@@ -19,6 +19,7 @@ sys_measure_text   equ 0x0303 ; input: al = bold flag, [ds:]si = cstr, [es:]di =
 sys_draw_icon      equ 0x0304 ; input: al = stride in pixels (multiple of 2), cx = x pos, dx = y pos, si = source, di = source rect; preserves: al, cx, dx, si, di; this uses magenta for the transparent mask
 sys_draw_invert    equ 0x0305 ; input: di = rect; preserves: di
 sys_hit_test_text  equ 0x0306 ; input: al = bold flag, [ds:]si = cstr, di = x pos; output: di = hit index (clamped); preserves: al, si
+sys_scroll_bits    equ 0x0307 ; input: di = destination rect, cx = delta x, dx = delta y; preserves: cx, dx, di; the source rect must fit inside the screen!
 sys_wnd_create     equ 0x0400 ; input: ax = window description, cs = owning module; output: ax = handle (0 if error)
 sys_wnd_destroy    equ 0x0401 ; input: ax = window handle
 sys_wnd_redraw     equ 0x0402 ; input: ax = window handle, dx = item id; preserves: ax, dx

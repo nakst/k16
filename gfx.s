@@ -3,9 +3,9 @@
 ; TODO Solid black/white block drawing can be sped up 2x.
 ; TODO 1px tall horizontal line block drawing can be optimized.
 ; TODO Glyph rendering: accurate horizontal clipping.
-; TODO Cursor save/restore: clipping to screen bounds.
-; TODO Cursor save/restore: don't bother if outside the clip list.
-; TODO sys_invert_rect hasn't been tested with ds = 0.
+; TODO Cursor save/restore: 
+;	- Clipping to screen bounds.
+; 	- Don't bother if outside the clip list.
 ; TODO Icon clipping bugs:
 ;	- Can't clip to draw just the last row of an icon.
 ;	- Move a window partially over an icon, then move the window to the right slightly (but still partially over the icon).
@@ -113,6 +113,53 @@ gfx_setup:
 ;	jmp	$
 ;	.test_string: db 'Hello, world!',0
 ;	.test_rect: dw 0,200,0,200
+
+;	.draw_test:
+;	mov	word [gfx_clip_count],1
+;	mov	ax,[gfx_clip_seg]
+;	mov	es,ax
+;	mov	word [es:rect_l],0
+;	mov	word [es:rect_r],640
+;	mov	word [es:rect_t],0
+;	mov	word [es:rect_b],350
+;	mov	cl,5
+;	mov	di,.full_rect
+;	mov	bx,sys_draw_block
+;	int	0x20
+;	mov	cl,15
+;	mov	di,.test_rect
+;	mov	bx,sys_draw_block
+;	int	0x20
+;	mov	cl,3
+;	mov	di,.test_rect2
+;	mov	bx,sys_draw_block
+;	int	0x20
+;	mov	ax,0x0001
+;	mov	cx,150
+;	mov	dx,40
+;	mov	si,.test_string
+;	mov	bx,sys_draw_text
+;	int	0x20
+;	mov	cx,10
+;	.loop:
+;	push	cx
+;	mov	bx,sys_scroll_bits
+;	mov	di,.test_rect
+;	mov	cx,-1
+;	mov	dx,1
+;	add	[di + rect_l],cx
+;	add	[di + rect_r],cx
+;	add	[di + rect_t],dx
+;	add	[di + rect_b],dx
+;	int	0x20
+;	pop	cx
+;	loop	.loop
+;	debug_log_16 0x1234
+;	jmp	$
+;	.test_string: db 'Hello, world!',0
+;	.test_rect: dw 130,580,30,180
+;	.test_rect2: dw 131,579,31,179
+;	.full_rect: dw 0,640,0,350
 
 ;	.draw_speed_test:
 ;	mov	word [gfx_clip_count],1
@@ -500,18 +547,8 @@ gfx_draw_cursor: ; input: ds = 0; trashes: ax, bx, cx, dx, di
 	push	ds
 	push	es
 	push	si
-	mov	dx,0x3CE
-	mov	al,0x05
-	out	dx,al
-	inc	dx
-	xor	al,al
-	out	dx,al ; read mode
-	dec	dx
-	mov	al,0x08
-	out	dx,al
-	inc	dx
-	mov	al,0xFF
-	out	dx,al ; masking
+
+	call	gfx_set_normal_graphics_mode
 
 	mov	ax,[cursor_drawn_x]
 	and	ax,7
@@ -1048,8 +1085,7 @@ gfx_draw_invert_single:
 do_draw_block: 
 	draw_for_clip_rect_loop gfx_draw_block_single
 
-do_draw_invert: 
-	.set_graphics_mode:
+gfx_set_normal_graphics_mode:
 	push	ax
 	push	dx
 	mov	dx,0x3CE
@@ -1066,8 +1102,271 @@ do_draw_invert:
 	out	dx,al ; read mode
 	pop	dx
 	pop	ax
+	ret
 
+do_draw_invert: 
+	call	gfx_set_normal_graphics_mode
 	draw_for_clip_rect_loop gfx_draw_invert_single
+
+gfx_scroll_bits_plane:
+	; see ../scrollbits2.cpp
+
+	push	cx
+	push	dx
+	push	di
+
+	call	gfx_prepare_clipped_rect
+	jc	.return
+
+	mov	ax,0xA000
+	mov	es,ax
+
+	; cx = delta x
+	; dx = delta y
+	; gfx_prepare_clipped_rect.rect = destination rectangle (clipped)
+
+	mov	ax,640 / 8
+	cmp	dx,0
+	jle	.up
+	neg	ax
+	.up:
+	mov	[.sy],ax
+
+	mov	ax,[gfx_prepare_clipped_rect.rect + rect_b]
+	sub	ax,[gfx_prepare_clipped_rect.rect + rect_t]
+	mov	[.y],ax
+
+	cmp	cx,0
+	jle	.left2
+	mov	di,[gfx_prepare_clipped_rect.rect + rect_r]
+	dec	di
+	jmp	.fx
+	.left2:
+	mov	di,[gfx_prepare_clipped_rect.rect + rect_l]
+	.fx:
+	cmp	dx,0
+	jle	.up2
+	mov	ax,[gfx_prepare_clipped_rect.rect + rect_b]
+	dec	ax
+	jmp	.fy
+	.up2:
+	mov	ax,[gfx_prepare_clipped_rect.rect + rect_t]
+	.fy:
+	; di = fx (pixels), ax = fy (pixels)
+	push	dx
+	mov	dx,640
+	imul	dx
+	add	ax,di
+	adc	dx,0
+	mov	bp,dx
+	mov	di,ax
+	pop	dx
+	mov	si,di
+	mov	ax,bp
+	; (bp=ax):(di=si) = destination
+
+	cmp	cx,0
+	jl	.left3
+	sub	si,cx
+	sbb	ax,0
+	jmp	.right3
+	.left3:
+	sub	si,cx
+	sbb	ax,0xFFFF
+	.right3:
+	push	ax
+	mov	ax,dx
+	mov	dx,640
+	imul	dx
+	sub	si,ax
+	pop	ax
+	sbb	ax,dx
+	mov	dx,ax
+	; bp:di = destination, dx:si = source
+
+	mov	bx,si
+	mov	ah,bl
+	mov	bx,di
+	mov	al,bl
+	and	ax,0x0707
+	rcr	bp,1
+	rcr	di,1
+	rcr	bp,1
+	rcr	di,1
+	rcr	bp,1
+	rcr	di,1
+	rcr	dx,1
+	rcr	si,1
+	rcr	dx,1
+	rcr	si,1
+	rcr	dx,1
+	rcr	si,1
+
+	; si = sourceIndex / 8
+	; di = index / 8
+	; ah = sourceIndex % 8
+	; al = index % 8
+	; es = 0xA000
+
+%macro gfx_macro_scroll_row_loop_prepare 1
+	%1:
+	xor	bh,bh
+	mov	bl,ah
+	mov	dh,[.lookup_bd + bx]
+	mov	bl,al
+	mov	dl,[.lookup_bd + bx]
+	mov	cx,[gfx_prepare_clipped_rect.rect + rect_r]
+	sub	cx,[gfx_prepare_clipped_rect.rect + rect_l]
+	push	si
+	push	di
+	; dh = b
+	; dl = d
+	; cx = x
+%endmacro
+
+%macro gfx_macro_scroll_row_loop_end 1
+	pop	di
+	pop	si
+	add	di,[.sy]
+	add	si,[.sy]
+	dec	word [.y]
+	jnz	%1
+%endmacro
+
+%macro gfx_macro_scroll_slow_copy_bit 3
+	.%1:
+	test	[es:si],dh
+	jz	.slow_clear_%1
+	or	[es:di],dl
+	jmp	.slow_next_%1
+	.slow_clear_%1:
+	not	dl
+	and	[es:di],dl
+	not	dl
+	.slow_next_%1:
+	%3	dh,1
+	%2	si,0
+	%3	dl,1
+	%2	di,0
+%endmacro
+
+%macro gfx_macro_scroll_fast_copy 4
+	push	ax
+
+	cmp	dl,dh
+	jne	.fast_normal_%1
+	.fast_in_phase_%1:
+	mov	bh,[es:si]
+	mov	[es:di],bh
+	%2	si
+	%2	di
+	sub	cx,8
+	cmp	cx,8
+	jg	.fast_in_phase_%1
+	jmp	.fast_done_%1
+
+	.fast_normal_%1:
+	mov	bp,cx ; bp = x
+	xor	ch,ch ; ch = 0
+	mov	bl,[es:si] ; bl = s
+
+	xor	al,al
+	mov	ah,dl
+	.fast_phase_%1:
+	inc	al
+	%3	ah,1
+	jnz	.fast_phase_%1
+	mov	ah,8
+	sub	ah,al
+	; al = phase + 1, ah = 7 - phase
+
+	mov	bh,0xFF
+	mov	cl,ah
+	.fast_shl_ff_%1: %3 bh,1
+	loop	.fast_shl_ff_%1
+	not	bh
+	and	[es:di],bh
+
+	.fast_%1:
+	mov	bh,bl
+	mov	cl,ah
+	.fast_shl_1_%1: %3 bh,1
+	loop	.fast_shl_1_%1
+	or	[es:di],bh
+	%2	si
+	%2	di
+	mov	cl,al
+	.fast_shr_1_%1: %4 bl,1
+	loop	.fast_shr_1_%1
+	mov	[es:di],bl
+	mov	bl,[es:si]
+	sub	bp,8
+	cmp	bp,16
+	jg	.fast_%1
+	mov	cx,bp
+
+	.fast_done_%1:
+
+	pop	ax
+%endmacro
+
+	cmp	cx,0
+	jle	.left_row_loop
+
+	gfx_macro_scroll_row_loop_prepare .right_row_loop
+	cmp	cx,24
+	jl	.right_tail
+	gfx_macro_scroll_slow_copy_bit right_head,sbb,rol
+	cmp	dh,0x01
+	loopne	.right_head
+	gfx_macro_scroll_fast_copy right,dec,shl,shr
+	gfx_macro_scroll_slow_copy_bit right_tail,sbb,rol
+	loop	.right_tail
+	gfx_macro_scroll_row_loop_end .right_row_loop
+
+	jmp	.return
+
+	gfx_macro_scroll_row_loop_prepare .left_row_loop
+	cmp	cx,24
+	jl	.left_tail
+	gfx_macro_scroll_slow_copy_bit left_head,adc,ror
+	cmp	dh,0x80
+	loopne	.left_head
+	gfx_macro_scroll_fast_copy left,inc,shr,shl
+	gfx_macro_scroll_slow_copy_bit left_tail,adc,ror
+	loop	.left_tail
+	gfx_macro_scroll_row_loop_end .left_row_loop
+
+	.return:
+	pop	di
+	pop	dx
+	pop	cx
+	ret
+
+	.sy: dw 0
+	.y: dw 0
+	.lookup_bd: db 0x80,0x40,0x20,0x10,0x08,0x04,0x02,0x01
+
+gfx_scroll_bits_single:
+	push	ds
+	mov	bx,0x0803
+	call	gfx_set_plane
+	call	gfx_scroll_bits_plane
+	mov	bx,0x0402
+	call	gfx_set_plane
+	call	gfx_scroll_bits_plane
+	mov	bx,0x0201
+	call	gfx_set_plane
+	call	gfx_scroll_bits_plane
+	mov	bx,0x0100
+	call	gfx_set_plane
+	call	gfx_scroll_bits_plane
+	pop	ds
+	ret
+
+do_scroll_bits: 
+	call	gfx_set_normal_graphics_mode
+	draw_for_clip_rect_loop gfx_scroll_bits_single
 
 do_draw_frame:
 	push	ds
@@ -1422,21 +1721,7 @@ do_draw_text:
 
 	mov	bp,ax
 
-	.set_graphics_mode:
-	push	dx
-	mov	dx,0x3CE
-	mov	al,0x08
-	out	dx,al
-	inc	dx
-	mov	al,0xFF
-	out	dx,al ; masking
-	dec	dx
-	mov	al,0x05
-	out	dx,al
-	inc	dx
-	xor	al,al
-	out	dx,al ; read mode
-	pop	dx
+	call	gfx_set_normal_graphics_mode
 
 	xor	ax,ax
 	mov	es,ax
@@ -1690,23 +1975,7 @@ do_draw_icon:
 	push	es
 	push	bp
 
-	.set_graphics_mode:
-	push	ax
-	push	dx
-	mov	dx,0x3CE
-	mov	al,0x08
-	out	dx,al
-	inc	dx
-	mov	al,0xFF
-	out	dx,al ; masking
-	dec	dx
-	mov	al,0x05
-	out	dx,al
-	inc	dx
-	xor	al,al
-	out	dx,al ; read mode
-	pop	dx
-	pop	ax
+	call	gfx_set_normal_graphics_mode
 
 	xor	bx,bx
 	mov	es,bx
@@ -1858,6 +2127,8 @@ do_gfx_syscall:
 	jz	do_draw_invert
 	dec	bl
 	jz	do_hit_test_text
+	dec	bl
+	jz	do_scroll_bits
 	jmp	exception_handler
 
 gfx_width:  dw 0

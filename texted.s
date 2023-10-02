@@ -1,5 +1,4 @@
 ; TODO Implement do_hit_test_text.
-; TODO Minimal redrawing.
 ; TODO Scrolling.
 ; TODO Backspace/delete.
 ; TODO Other motions.
@@ -101,6 +100,7 @@ start:
 	iret
 
 draw_line_background:
+	; TODO Only need to clear to the previous line width.
 	push	ds
 	push	cx
 	push	dx
@@ -109,6 +109,7 @@ draw_line_background:
 	mov	bx,sys_draw_block
 	mov	di,out_rect
 	mov	ax,[cs:draw_dispatch.left]
+	add	ax,[cs:redraw_offset_xp]
 	mov	[di + rect_l],ax
 	mov	ax,[cs:draw_dispatch.right]
 	mov	[di + rect_r],ax
@@ -163,8 +164,6 @@ draw_caret: ; ds = window extra
 	ret
 
 draw_line: ; input: cx = x pos, dx = y pos, ds = window extra, es = line data, bp = line index
-	xor	ax,ax ; black, not bold
-
 	mov	bx,bp
 	shl	bx,1
 	shl	bx,1
@@ -183,11 +182,16 @@ draw_line: ; input: cx = x pos, dx = y pos, ds = window extra, es = line data, b
 	.draw_line:
 	push	word [si + bx]
 	mov	byte [si + bx],0
+	add	si,[cs:redraw_offset_x]
+	add	cx,[cs:redraw_offset_xp]
 	push	bx
 	mov	bx,sys_draw_text
 	add	dx,[cs:draw_all.line_ascent]
+	xor	ax,ax ; black, not bold
 	int	0x20
 	sub	dx,[cs:draw_all.line_ascent]
+	sub	si,[cs:redraw_offset_x]
+	sub	cx,[cs:redraw_offset_xp]
 	pop	bx
 	pop	word [si + bx]
 	pop	ds
@@ -284,8 +288,7 @@ draw_dispatch:
 	add	dx,2
 	mov	ax,[di + rect_r]
 	mov	[cs:.right],ax
-	mov	ax,[di + rect_l]
-	mov	[cs:.left],ax
+	mov	[cs:.left],cx
 	ret
 
 	.add_y_offset_for_line: ; bp = line index
@@ -308,6 +311,36 @@ redraw_all:
 	int	0x20
 	pop	dx
 	pop	bx
+	ret
+
+redraw_actline_from: ; bx = offset in bytes
+	push	ds
+	push	es
+	push	ax
+	mov	ax,es
+	mov	ds,ax
+	mov	si,window_linebuf
+	push	word [bx + si]
+	mov	byte [bx + si],0
+	mov	di,out_rect
+	mov	ax,cs
+	mov	es,ax
+	xor	al,al
+	push	bx
+	mov	bx,sys_measure_text
+	int	0x20
+	pop	bx
+	pop	word [bx + si]
+	mov	cx,[cs:out_rect + rect_r]
+	pop	ax
+	pop	es
+	pop	ds
+
+	mov	[cs:redraw_offset_x],bx
+	mov	[cs:redraw_offset_xp],cx
+	call	redraw_actline
+	mov	word [cs:redraw_offset_x],0
+	mov	word [cs:redraw_offset_xp],0
 	ret
 
 redraw_actline:
@@ -685,8 +718,10 @@ key_typed_insert_char:
 	pop	ax
 
 	.redraw:
-	; TODO Minimal redrawing.
-	call	redraw_actline
+	; TODO Scrolling the bitmap for minimal redrawing.
+	mov	bx,[es:window_caret_x]
+	dec	bx
+	call	redraw_actline_from
 
 	.return:
 	iret
@@ -875,7 +910,16 @@ window_callback:
 	iret
 
 	.close:
-	; TODO Free memory.
+	push	ax
+	mov	bx,sys_wnd_get_extra
+	int	0x20
+	mov	ax,[es:window_lines]
+	mov	bx,sys_heap_free
+	int	0x20
+	mov	ax,[es:window_data]
+	mov	bx,sys_heap_free
+	int	0x20
+	pop	ax
 	mov	bx,sys_wnd_destroy
 	int	0x20
 	iret
@@ -886,7 +930,7 @@ key_lookup:
 	db 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 	db 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 	db 0,0,'!@#$%^&*()_+',127,9,'QWERTYUIOP{}',10,0
-	db 'ASDFGHJKL:',39,'~',0,'|ZXCVBNM<>?',0,'*',0,' ',0,0,0,0,0,0
+	db 'ASDFGHJKL:"~',0,'|ZXCVBNM<>?',0,'*',0,' ',0,0,0,0,0,0
 	db 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 	db 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 
@@ -921,4 +965,6 @@ window_menu_edit:
 out_rect: dw 0,0,0,0
 redraw_what: dw 0
 redraw_line: dw 0
+redraw_offset_x: dw 0
+redraw_offset_xp: dw 0
 caret_rect: dw 0,0,0,0

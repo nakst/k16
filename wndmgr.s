@@ -26,6 +26,8 @@ wnd_shown   equ 0x0C ; byte
 wnd_sz      equ 0x10
 ; item description follows
 
+menubar_height equ 21
+
 input_event_type equ 0x00
 input_event_data equ 0x01
 input_event_cx   equ 0x02
@@ -133,22 +135,22 @@ wndmgr_window_drag_loop: ; ax = window, bl = move flag
 	je	.exit_drag
 	.no_event:
 	mov	ax,[cursor_x_sync]
-	mov	[.old_cursor + 0],ax
+	mov	[.extra_rect + rect_l],ax
 	mov	ax,[cursor_y_sync]
-	mov	[.old_cursor + 2],ax
+	mov	[.extra_rect + rect_t],ax
 	call	wndmgr_update_cursor_pos
 	jc	.halt_and_loop
 
 	call	gfx_restore_beneath_cursor
 	call	.invert_drag_rect_border
-	mov	ax,[.old_cursor + 0]
+	mov	ax,[.extra_rect + rect_l]
 	sub	ax,[cursor_x_sync]
 	cmp	byte [.move],1
 	jne	.no_move
 	sub	[.drag_rect + rect_l],ax
 	.no_move:
 	sub	[.drag_rect + rect_r],ax
-	mov	ax,[.old_cursor + 2]
+	mov	ax,[.extra_rect + rect_t]
 	sub	ax,[cursor_y_sync]
 	cmp	byte [.move],1
 	jne	.no_move2
@@ -164,6 +166,33 @@ wndmgr_window_drag_loop: ; ax = window, bl = move flag
 	call	.invert_drag_rect_border
 	call	gfx_draw_cursor
 
+	mov	ax,[hot_window]
+	mov	es,ax
+	mov	ax,[es:wnd_l]
+	mov	[.invert_rect + rect_l],ax
+	mov	ax,[es:wnd_r]
+	mov	[.invert_rect + rect_r],ax
+	mov	ax,[es:wnd_t]
+	mov	[.invert_rect + rect_t],ax
+	mov	ax,[es:wnd_b]
+	mov	[.invert_rect + rect_b],ax
+
+	cmp	byte [.move],1
+	jne	.done_adjust
+	; When moving the window, align the delta x position to 8 pixels.
+	; This makes sys_scroll_bits much faster.
+	mov	cx,[.drag_rect + rect_l]
+	mov	ax,[.invert_rect + rect_l]
+	sub	cx,ax
+	add	cx,4
+	and	cx,~7
+	add	ax,cx
+	mov	[.drag_rect + rect_l],ax
+	mov	ax,[.invert_rect + rect_r]
+	add	ax,cx
+	mov	[.drag_rect + rect_r],ax
+	.done_adjust:
+
 	mov	bx,1
 	mov	ax,[hot_window]
 	call 	wndmgr_grow_items
@@ -171,25 +200,22 @@ wndmgr_window_drag_loop: ; ax = window, bl = move flag
 	mov	ax,[hot_window]
 	mov	es,ax
 	mov	ax,[.drag_rect + rect_l]
-	xchg	[es:wnd_l],ax
-	mov	[.invert_rect + rect_l],ax
+	mov	[es:wnd_l],ax
 	mov	ax,[.drag_rect + rect_r]
-	xchg	[es:wnd_r],ax
-	mov	[.invert_rect + rect_r],ax
+	mov	[es:wnd_r],ax
 	mov	ax,[.drag_rect + rect_t]
-	xchg	[es:wnd_t],ax
-	mov	[.invert_rect + rect_t],ax
+	mov	[es:wnd_t],ax
 	mov	ax,[.drag_rect + rect_b]
-	xchg	[es:wnd_b],ax
-	mov	[.invert_rect + rect_b],ax
+	mov	[es:wnd_b],ax
 
 	xor	bx,bx
 	mov	ax,[hot_window]
 	call 	wndmgr_grow_items
 
-	; TODO Instead of redrawing the window, 
-	; 	- when moving: blit the old contents to the new location.
-	;	- when resizing: redraw only the uncovered areas of the client.
+	cmp	byte [.move],1
+	je	.redraw_for_move
+
+	; TODO Resizing: instead of redrawing the entire window, only do the new areas of the client.
 	mov	word [gfx_clip_count],1
 	mov	bx,[gfx_clip_seg]
 	mov	es,bx
@@ -202,10 +228,92 @@ wndmgr_window_drag_loop: ; ax = window, bl = move flag
 	mov	ax,[.drag_rect + rect_b]
 	mov	[es:rect_b],ax
 	call	wndmgr_repaint
+	jmp	.redraw_uncovered
 
+	.redraw_for_move:
+	mov	cx,[.drag_rect + rect_l]
+	sub	cx,[.invert_rect + rect_l]
+	mov	dx,[.drag_rect + rect_t]
+	sub	dx,[.invert_rect + rect_t]
+	xor	ax,ax
+	cmp	word [.invert_rect + rect_l],ax
+	jge	.clamp_source_l
+	mov	word [.invert_rect + rect_l],ax
+	.clamp_source_l:
+	mov	ax,[gfx_width]
+	cmp	word [.invert_rect + rect_r],ax
+	jle	.clamp_source_r
+	mov	word [.invert_rect + rect_r],ax
+	.clamp_source_r:
+	mov	ax,menubar_height
+	cmp	word [.invert_rect + rect_t],ax
+	jge	.clamp_source_t
+	mov	word [.invert_rect + rect_t],ax
+	.clamp_source_t:
+	mov	ax,[gfx_height]
+	cmp	word [.invert_rect + rect_b],ax
+	jle	.clamp_source_b
+	mov	word [.invert_rect + rect_b],ax
+	.clamp_source_b:
+	push	cx
+	push	dx
+	call	gfx_restore_beneath_cursor
+	pop	dx
+	pop	cx
+	mov	ax,[.invert_rect + rect_l]
+	add	ax,cx
+	xchg	[.drag_rect + rect_l],ax
+	mov	[.extra_rect + rect_l],ax
+	mov	ax,[.invert_rect + rect_r]
+	add	ax,cx
+	xchg	[.drag_rect + rect_r],ax
+	mov	[.extra_rect + rect_r],ax
+	mov	ax,[.invert_rect + rect_t]
+	add	ax,dx
+	xchg	[.drag_rect + rect_t],ax
+	mov	[.extra_rect + rect_t],ax
+	mov	ax,[.invert_rect + rect_b]
+	add	ax,dx
+	xchg	[.drag_rect + rect_b],ax
+	mov	[.extra_rect + rect_b],ax
+	mov	di,.drag_rect
 	mov	word [gfx_clip_count],1
-	mov	bx,[gfx_clip_seg]
-	mov	es,bx
+	mov	es,[gfx_clip_seg]
+	mov	ax,[.drag_rect + rect_l]
+	mov	[es:rect_l],ax
+	mov	ax,[.drag_rect + rect_r]
+	mov	[es:rect_r],ax
+	mov	ax,[.drag_rect + rect_t]
+	mov	[es:rect_t],ax
+	mov	ax,[.drag_rect + rect_b]
+	mov	[es:rect_b],ax
+	mov	bx,sys_scroll_bits
+	int	0x20
+	call	gfx_draw_cursor
+	mov	word [gfx_clip_count],1
+	mov	es,[gfx_clip_seg]
+	mov	ax,[.extra_rect + rect_l] ; unclamped new rectangle
+	mov	[es:rect_l],ax
+	mov	ax,[.extra_rect + rect_r]
+	mov	[es:rect_r],ax
+	mov	ax,[.extra_rect + rect_t]
+	mov	[es:rect_t],ax
+	mov	ax,[.extra_rect + rect_b]
+	mov	[es:rect_b],ax
+	mov	ax,[.drag_rect + rect_l] ; minus clamped new rectangle
+	mov	[gfx_clip_rect + rect_l],ax
+	mov	ax,[.drag_rect + rect_r]
+	mov	[gfx_clip_rect + rect_r],ax
+	mov	ax,[.drag_rect + rect_t]
+	mov	[gfx_clip_rect + rect_t],ax
+	mov	ax,[.drag_rect + rect_b]
+	mov	[gfx_clip_rect + rect_b],ax
+	call	gfx_clip_subtract
+	call	wndmgr_repaint
+
+	.redraw_uncovered:
+	mov	word [gfx_clip_count],1
+	mov	es,[gfx_clip_seg]
 	mov	ax,[.invert_rect + rect_l] ; old rectangle
 	mov	[es:rect_l],ax
 	mov	ax,[.invert_rect + rect_r]
@@ -270,7 +378,7 @@ wndmgr_window_drag_loop: ; ax = window, bl = move flag
 
 	.drag_rect: dw 0,0,0,0
 	.invert_rect: dw 0,0,0,0
-	.old_cursor: dw 0,0
+	.extra_rect: dw 0,0,0,0
 	.move: db 0
 
 class_button:
@@ -616,7 +724,7 @@ wndmgr_setup:
 	mov	word [es:wnd_t],0
 	mov	cx,[gfx_width]
 	mov	word [es:wnd_r],cx
-	mov	word [es:wnd_b],21
+	mov	word [es:wnd_b],menubar_height
 	mov	bx,sys_wnd_show
 	int	0x20
 
@@ -2145,7 +2253,7 @@ do_wnd_destroy:
 	mov	es,ax
 
 	mov	bx,[es:wnd_segment]
-	xor	bx,bx
+	or	bx,bx
 	jz	.keep_module
 	sub	bx,module_sz / 16
 	mov	es,bx
